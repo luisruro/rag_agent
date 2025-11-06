@@ -42,4 +42,5 @@ vectorstore = Chroma.from_documents(
 # for i, doc in enumerate(output, start=1):
 #     print(f'Content = {doc.page_content}')
 #     print(f'Metadata = {doc.metadata}')
+#     print(f'DOCUMENT = {doc}')
 

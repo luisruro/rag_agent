@@ -15,6 +15,7 @@ from config import *
 from prompts import *
 from vector_store import embedding
 
+@st.cache_resource
 def initialize_rag_system():
     
     # Vector Store
@@ -51,9 +52,27 @@ def initialize_rag_system():
     
     prompt = PromptTemplate.from_template(RAG_TEMPLATE)
     
+    # function to format and preprocess the recovered documents
+    def format_docs(docs):
+        formatted = []
+        
+        for i, doc in enumerate(docs, 1):
+            header = f'[Fragment {1}]'
+            if doc.metadata:
+                if 'source' in doc.metadata:
+                    source = doc.metadata['source'].split("\\")[-1] if '\\' in doc.metadata['source'] else doc.metadata['source']
+                    header += f' - Source: {source}'
+                if 'page_label' in doc.metadata:
+                    header += f' - Pagina: {doc.metadata['page_label']}'
+                    
+            content = doc.page_content.strip()
+            formatted.append(f'{header}\n{content}')
+            
+        return "\n\n".join(formatted)
+    
     rag_chain = (
         {
-            "context" : mmr_multi_retriever,
+            "context" : mmr_multi_retriever | format_docs,
             "question" : RunnablePassthrough()
         }
         | prompt 
@@ -62,3 +81,39 @@ def initialize_rag_system():
     )
     
     return rag_chain, mmr_multi_retriever
+
+def query_rag(question):
+    try:
+        rag_chain, retriever = initialize_rag_system()
+        
+        # Get Answer
+        response = rag_chain.invoke(question)
+        
+        # Get docs to show them
+        docs = retriever.invoke(question)
+        
+        # Format docs to show
+        docs_info = []
+        for i, doc in enumerate(docs[:SEARCH_K], 1):
+            doc_info = {
+                "fragment" : i,
+                "content" : doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,
+                "source" : doc.metadata.get('source', 'No specified').split("\\")[-1],
+                "page" : doc.metadata.get('page_label', 'No specified')
+            }
+            docs_info.append(doc_info)
+            
+        return response, docs_info
+    except Exception as e:
+        error_msg = f'Could not process the query: {str(e)}'
+        return error_msg, []
+    
+def get_retriever_info():
+    """Obtiene información sobre la configuración del retriever"""
+    return{
+        "tipo" : f'{SEARCH_TYPE.upper()}',
+        "documentos" : SEARCH_K,
+        "diversidad" : MMR_DIVERSITY_LAMBDA,
+        "candidatos" : MMR_FETCH_K,
+        "umbral" : None
+    }
