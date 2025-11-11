@@ -15,8 +15,8 @@ documents = loader.load()
 print(f'{len(documents)} documents were uploaded from directory')
 
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size = 5000,
-    chunk_overlap = 1000
+    chunk_size = 1000,
+    chunk_overlap = 200
 )
 
 docs_split = text_splitter.split_documents(documents)
