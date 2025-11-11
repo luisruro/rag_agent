@@ -10,4 +10,4 @@ CHROMA_DB_PATH = "./app/chroma_db"
 SEARCH_TYPE = "mmr"
 MMR_DIVERSITY_LAMBDA = 0.7
 MMR_FETCH_K = 20 #Initial docs before applying MMR
-SEARCH_K = 2 #Final docs after applying el MVR
+SEARCH_K = 4 #Final docs after applying el MVR
