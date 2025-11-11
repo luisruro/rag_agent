@@ -63,7 +63,7 @@ def initialize_rag_system():
                     source = doc.metadata['source'].split("\\")[-1] if '\\' in doc.metadata['source'] else doc.metadata['source']
                     header += f' - Source: {source}'
                 if 'page_label' in doc.metadata:
-                    header += f' - Pagina: {doc.metadata['page_label']}'
+                    header += f" - Pagina: {doc.metadata['page_label']}"
                     
             content = doc.page_content.strip()
             formatted.append(f'{header}\n{content}')
