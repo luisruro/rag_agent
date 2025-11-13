@@ -1,27 +1,28 @@
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-#from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-#from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 import streamlit as st
+
+from langchain_weaviate.vectorstores import WeaviateVectorStore
+import weaviate
 
 import os
 from dotenv import load_dotenv
 
 from config import *
 from prompts import *
-from vector_store import embedding
+from vector_store import embedding, client
 
 @st.cache_resource
 def initialize_rag_system():
-    
-    # Vector Store
-    vector_store = Chroma(
-        embedding_function=embedding,
-        persist_directory=CHROMA_DB_PATH
+
+    vector_store = WeaviateVectorStore(
+        client=client,
+        index_name="DocumentChunk",  # 👈 debe coincidir con el nombre que creaste en vector_store.py
+        text_key="text",             # 👈 el campo donde guardaste el contenido
+        embedding=embedding
     )
     
     # Modelos

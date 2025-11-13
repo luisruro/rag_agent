@@ -1,3 +1,7 @@
+networks:
+  rag_network:
+    driver: bridge
+
 services:
   rag-app:
     build: .
@@ -6,8 +10,38 @@ services:
       - "8501:8501"
     volumes:
       - ./app/data:/app/app/data
-      - ./app/chroma_db:/app/app/chroma_db
       - ./.env:/app/.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WEAVIATE_HOST=weaviate
+      - WEAVIATE_PORT=8080
+    depends_on:
+      - weaviate
+    networks:
+      - rag_network
     restart: unless-stopped
+
+  weaviate:
+    command:
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8080'
+    - --scheme
+    - http
+    image: cr.weaviate.io/semitechnologies/weaviate:1.34.0
+    ports:
+    - 8080:8080
+    - 50051:50051
+    volumes:
+    - ./data:/var/lib/weaviate
+    restart: on-failure:0
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      ENABLE_MODULES: 'none'
+      CLUSTER_HOSTNAME: 'node1'
+    networks:
+      - rag_network
+

@@ -37,7 +37,7 @@ If you modify any Python file or prompt, you must rebuild the image before runni
 `docker compose build`
 `docker compose up -d`
 
-🧰 Run with Virtual Environment
+## 🧰 Run with Virtual Environment
 
 ### 1️ Create and activate the environment Git Bash
 
@@ -57,3 +57,36 @@ Make sure .env contains your OpenAI API key.
 streamlit run app/app.py
 
 Then visit http://localhost:8501
+
+## Weaviate Vector Database Setup
+
+This project uses Weaviate as a vector database to store and query embeddings generated with OpenAI.
+
+### 🚀 How to Start Weaviate
+
+1. Make sure Docker is installed and running.
+
+2. Start Weaviate with the following command:
+
+`docker-compose up -d`
+
+This will launch Weaviate locally on the following ports:
+
+- 8080 → REST API
+- 50051 → gRPC
+
+### ✅ Verify Weaviate is Running
+
+You can check if the server is running by visiting:
+
+👉 http://localhost:8080/v1/meta
+
+### 📚 Collection Used
+
+This project creates (if not already existing) a collection named DocumentChunk, which stores text fragments (chunks) extracted from PDF documents along with their embeddings.
+
+**Main properties:**
+
+- text: The chunk text content
+- source: The original PDF file the chunk came from
+- chunk_index: The position of the chunk within the document

@@ -4,7 +4,7 @@ QUERY_MODEL = "gpt-4o-mini"
 GENERATION_MODEL = "gpt-4o"
 
 # Vector store setting
-CHROMA_DB_PATH = "./app/chroma_db"
+#CHROMA_DB_PATH = "./app/chroma_db"
 
 # Retriever setting
 SEARCH_TYPE = "mmr"
