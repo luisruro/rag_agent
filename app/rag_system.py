@@ -95,7 +95,7 @@ def query_rag(question):
         
         # Format docs to show
         docs_info = []
-        for i, doc in enumerate(docs[:SEARCH_K], 1):
+        for i, doc in enumerate(docs[:5], 1):
             doc_info = {
                 "fragment" : i,
                 "content" : doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,

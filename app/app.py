@@ -1,55 +1,88 @@
 import streamlit as st
 from rag_system import query_rag, get_retriever_info
 
-# Configuración de la página
+# --- LOGIN SYSTEM ---
+def login():
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    user = st.text_input("User")
+    password = st.text_input("Password", type="password")
+
+    USER = "admin"
+    PASS = "1234"
+
+    if st.button("Login"):
+        if user == USER and password == PASS:
+            st.session_state["authenticated"] = True
+            st.success("🔓 Login success!")
+            st.rerun()
+        else:
+            st.error("❌ User or password incorrect")
+
+    return False
+
+# Not authenticated, stop the app
+if not login():
+    st.stop()
+
 st.set_page_config(
-    page_title="Sistema RAG - Asistente Facturación",
+    page_title="RAG system - Invot",
     page_icon="📄",
     layout="wide"
 )
 
-# Título
-st.title("📄 Sistema RAG - Asistente de Facturación")
+st.title("📄 RAG system - Invot")
 st.divider()
 
-# Inicializar el historial de chat
+# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Sidebar simplificado
+# Sidebar
 with st.sidebar:
-    st.header("📋 Información del Sistema")
+    st.header("📋 System Information")
     
-    # Información del retriever
+    # logout button
+    if st.button("🔓 Logout", type="primary", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.success("🔒 Sesión cerrada")
+        st.rerun()
+    
+    # retriever information
     retriever_info = get_retriever_info()
     
     st.markdown("**🔍 Retriever:**")
     st.info(f"Tipo: {retriever_info['tipo']}")
     
-    st.markdown("**🤖 Modelos:**")
-    st.info("Consultas: GPT-4o-mini\nRespuestas: GPT-4o")
+    st.markdown("**🤖 Models:**")
+    st.info("Queries: GPT-4o-mini\nResponses: GPT-4o")
+    
+    st.markdown("**📁​ Repository:**")
+    st.info("🔗 [Open repository in GitHub](https://github.com/luisruro/rag_agent.git)")
     
     st.divider()
     
-    if st.button("🗑️ Limpiar Chat", type="secondary", use_container_width=True):
+    if st.button("🗑️ Clean Chat", type="secondary", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# Layout principal con columnas
+# Main layaout with columns
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.markdown("### 💬 Chat")
     
-    # Mostrar historial de mensajes
+    # Show message history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
 with col2:
-    st.markdown("### 📄 Documentos Relevantes")
+    st.markdown("### 📄 Relevant Documents")
     
-    # Mostrar documentos de la última consulta
+    # Show documents from the last query
     if st.session_state.messages:
         last_message = st.session_state.messages[-1]
         if last_message["role"] == "assistant" and "docs" in last_message:
@@ -57,28 +90,28 @@ with col2:
             
             if docs:
                 for doc in docs:
-                    with st.expander(f"📄 Fragmento {doc['fragment']}", expanded=False):
-                        st.markdown(f"**Fuente:** {doc['source']}")
-                        st.markdown(f"**Página:** {doc['page']}")
-                        st.markdown("**Contenido:**")
+                    with st.expander(f"📄 Fragment {doc['fragment']}", expanded=False):
+                        st.markdown(f"**Source:** {doc['source']}")
+                        st.markdown(f"**Page:** {doc['page']}")
+                        st.markdown("**Content:**")
                         st.text(doc['content'])
 
-# Input del usuario
-if prompt := st.chat_input("Escribe tu consulta sobre contratos de arrendamiento..."):
-    # Añadir mensaje del usuario al historial
+# User input
+if prompt := st.chat_input("Type your request..."):
+    # Add user message to history
     st.session_state.messages.append({"role": "user", "content": prompt})
     
-    # Generar respuesta
-    with st.spinner("🔍 Analizando..."):
+    # Generate response
+    with st.spinner("🔍 analyzing data..."):
         response, docs = query_rag(prompt)
         st.session_state.messages.append({"role": "assistant", "content": response, "docs": docs})
     
-    # Recargar para mostrar los nuevos mensajes
+    # Reload to show new messages
     st.rerun()
 
 # Footer
 st.divider()
 st.markdown(
-    "<div style='text-align: center; color: #666;'>📈 Asistente de Facturación con MMR Retriever</div>", 
+    "<div style='text-align: center; color: #666;'>📈 Invoice assistant with MMR Retriever</div>", 
     unsafe_allow_html=True
 )

@@ -42,7 +42,7 @@ collection_name = "DocumentChunk"
 existing_collections = [c for c in client.collections.list_all()]
 
 if collection_name not in existing_collections:
-    client.collections.insert(
+    client.collections.create(
         name=collection_name,
         description="Chunks de texto de los PDF con embeddings de OpenAI",
         properties=[
