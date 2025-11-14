@@ -26,6 +26,10 @@ It allows you to query and analyze PDF invoices, contracts, or other financial d
 
 Then open http://localhost:8501 (or your configured port).
 
+**user**: admin
+
+**Password**: 1234
+
 ### 3️ Stop the container
 
 `docker compose down`
