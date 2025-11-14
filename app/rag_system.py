@@ -20,8 +20,8 @@ def initialize_rag_system():
 
     vector_store = WeaviateVectorStore(
         client=client,
-        index_name="DocumentChunk",  # 👈 debe coincidir con el nombre que creaste en vector_store.py
-        text_key="text",             # 👈 el campo donde guardaste el contenido
+        index_name="DocumentChunk",  # It must match the name you created in vector_store.py
+        text_key="text",             # the field where you saved the content
         embedding=embedding
     )
     
@@ -29,8 +29,7 @@ def initialize_rag_system():
     llm_queries = ChatOpenAI(model=QUERY_MODEL, temperature=0)
     llm_generation = ChatOpenAI(model=GENERATION_MODEL, temperature=0)
     
-    #No solo se centra en la similutd si no en la diversidad, es mas avanzado que el de similitud de coseno
-    # Retriever MMR (Maxima Margin Relevance)
+    # Retriever MMR (Maximum Marginal Relevance)
     base_retriever = vector_store.as_retriever(
         search_type = SEARCH_TYPE,
         search_kwargs = {
