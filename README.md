@@ -26,6 +26,8 @@ It allows you to query and analyze PDF invoices, contracts, or other financial d
 
 Then open http://localhost:8501 (or your configured port).
 
+### 3 Credentials
+
 **user**: admin
 
 **Password**: 1234
