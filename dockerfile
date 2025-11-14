@@ -1,33 +1,30 @@
-# ==============================
-# Dockerfile
-# ==============================
 FROM python:3.11-slim
 
-# Evitar prompts interactivos
+# Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Crear directorio de trabajo
+# Create working directory
 WORKDIR /app
 
-# Copiar dependencias
+# Copy dependencies
 COPY requirements.txt .
 
-# Instalar dependencias del sistema y Python
+# Install system dependencies and Python
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential && \
     pip install --no-cache-dir -r requirements.txt && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copiar la aplicación
+# Copy the application
 COPY . .
 
-# Exponer el puerto de Streamlit
+# Streamlit port
 EXPOSE 8501
 
-# Configuración de Streamlit (evita advertencias)
+# Streamlit settings
 ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_SERVER_PORT=8501
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
-# Comando de inicio
+# start command
 CMD ["streamlit", "run", "app/app.py"]
