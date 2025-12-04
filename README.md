@@ -43,24 +43,23 @@ If you modify any Python file or prompt, you must rebuild the image before runni
 `docker compose build`
 `docker compose up -d`
 
-## 🧰 Run with Virtual Environment
+## 🧰 Run with UV (Python Environment + Dependencies)
 
-### 1️ Create and activate the environment Git Bash
+### 1️ Install uv (if you don’t have it locally) Git Bash
 
-`python -m venv .venv`
-`source .venv/Scripts/activate`
+`curl -LsSf https://astral.sh/uv/install.sh | sh`
 
-### 2️ Install dependencies
+### 2️ Sync dependencies
 
-`pip install -r requirements.txt`
+`uv sync`
 
 ### 3️ Set your environment variable
 
 Make sure .env contains your OpenAI API key.
 
 ### 4️ Run the app
-
-streamlit run app/app.py
+`docker compose up -d`
+`uv run streamlit run app/app.py`
 
 Then visit http://localhost:8501
 
