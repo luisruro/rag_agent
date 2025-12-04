@@ -3,7 +3,6 @@ from rag_system import query_rag, get_retriever_info
 
 # --- LOGIN SYSTEM ---
 def login():
-
     if st.session_state.get("authenticated"):
         return True
 
@@ -59,7 +58,10 @@ with st.sidebar:
     st.markdown("**🤖 Models:**")
     st.info("Queries: GPT-4o-mini\nResponses: GPT-4o")
     
-    st.markdown("**📁​ Repository:**")
+    st.markdown("**💱 Currency:**")
+    st.info("Auto-conversion to USD enabled")
+    
+    st.markdown("**📁 Repository:**")
     st.info("🔗 [Open repository in GitHub](https://github.com/luisruro/rag_agent.git)")
     
     st.divider()
@@ -68,7 +70,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Main layaout with columns
+# Main layout with columns
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -87,6 +89,18 @@ with col2:
         last_message = st.session_state.messages[-1]
         if last_message["role"] == "assistant" and "docs" in last_message:
             docs = last_message["docs"]
+            currency_conversions = last_message.get("currency_conversions", [])
+            
+            # Show currency conversions if available
+            if currency_conversions:
+                st.markdown("#### 💱 Currency Conversions")
+                for conv in currency_conversions:
+                    st.info(
+                        f"**{conv['original_amount']} {conv['original_currency']}** "
+                        f"= **{conv['converted_amount']} USD** "
+                        f"(rate: {conv['rate']})"
+                    )
+                st.divider()
             
             if docs:
                 for doc in docs:
@@ -103,8 +117,13 @@ if prompt := st.chat_input("Type your request..."):
     
     # Generate response
     with st.spinner("🔍 analyzing data..."):
-        response, docs = query_rag(prompt)
-        st.session_state.messages.append({"role": "assistant", "content": response, "docs": docs})
+        response, docs, currency_conversions = query_rag(prompt)  # Now returns 3 values
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": response, 
+            "docs": docs,
+            "currency_conversions": currency_conversions
+        })
     
     # Reload to show new messages
     st.rerun()
@@ -112,6 +131,6 @@ if prompt := st.chat_input("Type your request..."):
 # Footer
 st.divider()
 st.markdown(
-    "<div style='text-align: center; color: #666;'>📈 Invoice assistant with MMR Retriever</div>", 
+    "<div style='text-align: center; color: #666;'>📈 Invoice assistant with MMR Retriever & Currency Conversion</div>", 
     unsafe_allow_html=True
 )

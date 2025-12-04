@@ -10,3 +10,4 @@ langchain-classic
 weaviate-client
 tqdm
 langchain-weaviate
+requests

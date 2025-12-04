@@ -1,9 +1,9 @@
+# app/rag_system.py
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Annotated
-import operator
+from typing import TypedDict, List
 import streamlit as st
 
 from langchain_weaviate.vectorstores import WeaviateVectorStore
@@ -14,6 +14,40 @@ from dotenv import load_dotenv
 
 from config import *
 from prompts import *
+
+# Load environment variables
+load_dotenv()
+
+# Try to import currency_exchange with error handling
+CURRENCY_ENABLED = False
+currency_exchanger = None
+
+try:
+    from currency_exchange import currency_exchanger
+    # Test if API key is available
+    if os.getenv("EXCHANGERATE_API_KEY"):
+        CURRENCY_ENABLED = True
+        print("✅ Currency exchange enabled with API key")
+    else:
+        print("⚠️  EXCHANGERATE_API_KEY not found. Currency conversion will use free APIs.")
+        CURRENCY_ENABLED = True  # Still enabled but will use free APIs
+except ImportError as e:
+    print(f"❌ Currency exchange module not found: {e}")
+    # Create a dummy currency exchanger
+    class DummyCurrencyExchanger:
+        def extract_and_convert_amounts(self, text, target_currency="USD"):
+            return []
+        def convert_amount(self, amount, from_currency, to_currency):
+            return amount
+    currency_exchanger = DummyCurrencyExchanger()
+except Exception as e:
+    print(f"❌ Error loading currency exchange: {e}")
+    class DummyCurrencyExchanger:
+        def extract_and_convert_amounts(self, text, target_currency="USD"):
+            return []
+        def convert_amount(self, amount, from_currency, to_currency):
+            return amount
+    currency_exchanger = DummyCurrencyExchanger()
 
 # Load environment variables
 load_dotenv()
@@ -29,6 +63,7 @@ class GraphState(TypedDict):
     query_llm: ChatOpenAI
     generation_llm: ChatOpenAI
     vector_store: WeaviateVectorStore
+    currency_conversions: List[dict]
 
 # Initialize components
 @st.cache_resource
@@ -162,18 +197,61 @@ def format_context(state: GraphState):
     return {"context": formatted_context}
 
 def generate_answer(state: GraphState):
-    """Generate final answer using context"""
+    """Generate final answer using context with currency conversion"""
     generation_llm = state['generation_llm']
+    context = state["context"]
+    question = state["question"]
     
-    prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
+    # Extract and convert currencies from context
+    conversions = []
+    if CURRENCY_ENABLED and currency_exchanger:
+        try:
+            conversions = currency_exchanger.extract_and_convert_amounts(context, target_currency="USD")
+        except Exception as e:
+            print(f"Error in currency conversion: {e}")
+            conversions = []
+    
+    # Add currency conversion info to context if any conversions found
+    if conversions:
+        conversion_text = "\n\nCURRENCY CONVERSIONS (to USD):\n"
+        for conv in conversions:
+            conversion_text += f"- {conv['original_amount']} {conv['original_currency']} = {conv['converted_amount']} USD (rate: {conv['rate']})\n"
+        context += conversion_text
+        
+        # Store conversions in state
+        state["currency_conversions"] = conversions
+    
+    # Create enhanced prompt with currency instructions
+    enhanced_prompt = RAG_TEMPLATE + """
+    
+    ADDITIONAL CURRENCY INSTRUCTIONS:
+    - When mentioning monetary amounts, include both the original currency and USD equivalent.
+    - Use the following conversions (if available):
+    {currency_conversions}
+    
+    - If amounts are in different currencies, provide a summary in USD for comparison.
+    - Always specify the currency when mentioning amounts.
+    """
+    
+    # Format currency conversions for the prompt
+    conv_text = ""
+    if conversions:
+        conv_text = "Currency conversions found:\n"
+        for conv in conversions:
+            conv_text += f"- {conv['original_amount']} {conv['original_currency']} = {conv['converted_amount']} USD\n"
+    else:
+        conv_text = "No currency conversions found. Mention amounts in their original currency only."
+    
+    prompt = ChatPromptTemplate.from_template(enhanced_prompt)
     
     chain = prompt | generation_llm
     response = chain.invoke({
-        "context": state["context"],
-        "question": state["question"]
+        "context": context,
+        "question": question,
+        "currency_conversions": conv_text
     })
     
-    return {"answer": response.content}
+    return {"answer": response.content, "currency_conversions": conversions}
 
 def build_rag_graph():
     """Build the LangGraph workflow"""
@@ -221,7 +299,8 @@ def query_rag(question):
             "answer": "",
             "query_llm": query_llm,
             "generation_llm": generation_llm,
-            "vector_store": vector_store
+            "vector_store": vector_store,
+            "currency_conversions": []
         }
         
         # Execute the graph
@@ -238,20 +317,32 @@ def query_rag(question):
             }
             docs_info.append(doc_info)
         
-        return final_state["answer"], docs_info
+        return final_state["answer"], docs_info, final_state.get("currency_conversions", [])
         
     except Exception as e:
         error_msg = f'Could not process the query: {str(e)}'
         import traceback
         error_msg += f'\n\nDetailed error:\n{traceback.format_exc()}'
-        return error_msg, []
+        return error_msg, [], []
 
 def get_retriever_info():
     """Get retriever configuration information"""
-    return {
+    info = {
         "tipo": f'{SEARCH_TYPE.upper()} with LangGraph',
         "documentos": SEARCH_K,
         "diversidad": MMR_DIVERSITY_LAMBDA,
         "candidatos": MMR_FETCH_K,
         "umbral": None
     }
+    
+    # Add currency info
+    if CURRENCY_ENABLED:
+        info["currency"] = "Enabled (API)"
+        if os.getenv("EXCHANGERATE_API_KEY"):
+            info["currency_api"] = "ExchangeRate-API"
+        else:
+            info["currency_api"] = "Free APIs (Frankfurter/ECB)"
+    else:
+        info["currency"] = "Disabled"
+    
+    return info
