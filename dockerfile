@@ -7,7 +7,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Copy dependencies
-COPY requirements.txt .
+COPY pyproject.toml .
+COPY uv.lock .
 
 # Install system dependencies and Python
 RUN apt-get update && \
