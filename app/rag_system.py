@@ -26,25 +26,32 @@ class GraphState(TypedDict):
     documents: List[dict]
     context: str
     answer: str
+    query_llm: ChatOpenAI
+    generation_llm: ChatOpenAI
+    vector_store: WeaviateVectorStore
 
 # Initialize components
 @st.cache_resource
 def initialize_components():
     """Initialize all components once"""
-    # Weaviate vector store
+    # Weaviate connection
     client = weaviate.connect_to_local(
         host="weaviate",
-        port=8080
+        port=8088
     )
     
+    # Create embeddings
+    embedding = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=os.getenv("OPENAI_API_KEY")
+    )
+    
+    # Create vector store
     vector_store = WeaviateVectorStore(
         client=client,
         index_name="DocumentChunk",
         text_key="text",
-        embedding=OpenAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
+        embedding=embedding
     )
     
     # LLMs
@@ -60,7 +67,7 @@ def initialize_components():
         api_key=os.getenv("OPENAI_API_KEY")
     )
     
-    return vector_store, query_llm, generation_llm, client
+    return vector_store, query_llm, generation_llm, client, embedding
 
 def format_docs(docs):
     """Format documents for context"""
@@ -108,8 +115,8 @@ def retrieve_documents(state: GraphState):
     all_docs = []
     
     for query in queries:
-        # Perform MMR search
-        docs = vector_store.similarity_search_with_relevance_scores(
+        # Perform similarity search
+        docs = vector_store.similarity_search_with_score(
             query=query,
             k=MMR_FETCH_K
         )
@@ -126,8 +133,8 @@ def retrieve_documents(state: GraphState):
                 # Check similarity with already selected docs
                 should_add = True
                 for selected_doc, _ in selected_docs:
-                    # Simple similarity check (can be enhanced)
-                    if doc.page_content[:50] == selected_doc.page_content[:50]:
+                    # Simple similarity check
+                    if doc.page_content[:100] == selected_doc.page_content[:100]:
                         should_add = False
                         break
                 
@@ -142,7 +149,7 @@ def retrieve_documents(state: GraphState):
     unique_docs = []
     seen_content = set()
     for doc in all_docs:
-        content_start = doc.page_content[:100]
+        content_start = doc.page_content[:200]
         if content_start not in seen_content:
             seen_content.add(content_start)
             unique_docs.append(doc)
@@ -192,7 +199,7 @@ def build_rag_graph():
 @st.cache_resource
 def initialize_rag_system():
     """Initialize the complete RAG system"""
-    vector_store, query_llm, generation_llm, client = initialize_components()
+    vector_store, query_llm, generation_llm, client, embedding = initialize_components()
     
     # Build the graph
     graph = build_rag_graph()
@@ -205,16 +212,16 @@ def query_rag(question):
         # Get initialized components
         graph, vector_store, query_llm, generation_llm, client = initialize_rag_system()
         
-        # Prepare initial state
+        # Prepare initial state with ALL required components
         initial_state = {
             "question": question,
             "queries": [],
             "documents": [],
             "context": "",
             "answer": "",
-            "vector_store": vector_store,
             "query_llm": query_llm,
-            "generation_llm": generation_llm
+            "generation_llm": generation_llm,
+            "vector_store": vector_store
         }
         
         # Execute the graph
@@ -235,6 +242,8 @@ def query_rag(question):
         
     except Exception as e:
         error_msg = f'Could not process the query: {str(e)}'
+        import traceback
+        error_msg += f'\n\nDetailed error:\n{traceback.format_exc()}'
         return error_msg, []
 
 def get_retriever_info():
