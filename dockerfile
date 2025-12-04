@@ -12,9 +12,13 @@ COPY uv.lock .
 
 # Install system dependencies and Python
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    pip install --no-cache-dir -r requirements.txt && \
+    apt-get install -y --no-install-recommends build-essential curl && \
+    curl -LsSf https://astral.sh/uv/install.sh | sh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.local/bin:${PATH}"
+
+RUN uv sync --no-dev
 
 # Copy the application
 COPY . .
