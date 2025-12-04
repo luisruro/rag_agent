@@ -28,4 +28,4 @@ ENV STREAMLIT_SERVER_PORT=8501
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # start command
-CMD ["streamlit", "run", "app/app.py"]
+CMD ["uv", "run", "streamlit", "run", "app/app.py"]
