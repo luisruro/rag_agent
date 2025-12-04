@@ -32,8 +32,8 @@ embedding = OpenAIEmbeddings(
 
 # Weaviate connection
 client = weaviate.connect_to_local(
-    host="weaviate",
-    port=8080
+    host=WEAVIATE_HOST,
+    port=WEAVIATE_PORT
 )
 
 # create collection if not exists

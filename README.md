@@ -58,7 +58,7 @@ If you modify any Python file or prompt, you must rebuild the image before runni
 Make sure .env contains your OpenAI API key.
 
 ### 4️ Run the app
-
+`docker compose up -d`
 `uv run streamlit run app/app.py`
 
 Then visit http://localhost:8501
