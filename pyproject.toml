@@ -1,0 +1,19 @@
+[project]
+name = "billing-system"
+version = "0.1.0"
+description = "Bill rag system with LangGraph, Weaviate, and Chainlit"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "langchain",
+    "langchain-openai",
+    "langchain-community",
+    "langchain-weaviate",
+    "python-dotenv",
+    "pypdf",
+    "streamlit",
+    "weaviate-client",
+    "tqdm",
+    "langchain-classic"
+]
