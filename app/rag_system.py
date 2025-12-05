@@ -73,8 +73,8 @@ def initialize_components():
     """Initialize all components once"""
     # Weaviate connection
     client = weaviate.connect_to_local(
-        host="weaviate",
-        port=8088
+        host=WEAVIATE_HOST,
+        port=WEAVIATE_PORT
     )
     
     # Create embeddings

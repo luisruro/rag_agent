@@ -36,8 +36,8 @@ def create_vector_store():
     
     # Weaviate connection
     client = weaviate.connect_to_local(
-        host="weaviate",
-        port=8088
+        host=WEAVIATE_HOST,
+        port=WEAVIATE_PORT
     )
     
     # Create collection if not exists
