@@ -1,4 +1,4 @@
- # app/rag_system.py
+# app/rag_system.py
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -40,6 +40,14 @@ except ImportError as e:
             return []
         def convert_amount(self, amount, from_currency, to_currency):
             return amount
+        def get_currency_for_country(self, country):
+            return "USD"
+        def get_currency_for_address(self, address):
+            return "USD"
+        def get_country_from_address(self, address):
+            return None
+        def enhance_answer_with_conversion(self, answer, shipping_address):
+            return answer
     currency_exchanger = DummyCurrencyExchanger()
 except Exception as e:
     print(f" Error loading currency exchange: {e}")
@@ -48,10 +56,15 @@ except Exception as e:
             return []
         def convert_amount(self, amount, from_currency, to_currency):
             return amount
+        def get_currency_for_country(self, country):
+            return "USD"
+        def get_currency_for_address(self, address):
+            return "USD"
+        def get_country_from_address(self, address):
+            return None
+        def enhance_answer_with_conversion(self, answer, shipping_address):
+            return answer
     currency_exchanger = DummyCurrencyExchanger()
-
-# Load environment variables
-load_dotenv()
 
 # Define state schema
 class GraphState(TypedDict):
@@ -66,6 +79,9 @@ class GraphState(TypedDict):
     vector_store: WeaviateVectorStore
     currency_conversions: List[dict]
     should_convert_currency: bool
+    shipping_address: str
+    destination_country: str
+    dest_currency: str
 
 # Initialize components
 @st.cache_resource
@@ -124,6 +140,97 @@ def format_docs(docs):
         
     return "\n\n".join(formatted)
 
+def extract_shipping_address(context):
+    """Extract shipping address from context"""
+    # Look for shipping address patterns
+    patterns = [
+        r'Ship To:\s*(.+?)(?:\n|$)',
+        r'Shipping Address:\s*(.+?)(?:\n|$)',
+        r'Address:\s*(.+?)(?:\n|$)',
+        r'Destination:\s*(.+?)(?:\n|$)',
+        r'Deliver To:\s*(.+?)(?:\n|$)',
+        r'Shipped to:\s*(.+?)(?:\n|$)',
+        r'Bill To:\s*(.+?)(?:\n|$)',
+        r'Invoice To:\s*(.+?)(?:\n|$)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, context, re.IGNORECASE | re.DOTALL)
+        if match:
+            # Clean up the address - take first 200 chars max
+            address = match.group(1).strip()
+            # Remove any additional labels that might be captured
+            address = re.sub(r'^\s*(?:Name|Contact|Phone|Email|Date|Invoice).*?:.*?$', '', address, flags=re.MULTILINE | re.IGNORECASE)
+            address = ' '.join(address.split('\n')[:3]).strip()  # Take first 3 lines
+            if address:
+                return address
+    
+    return None
+
+def extract_country_from_address(address):
+    """Extract country from shipping address"""
+    if not address:
+        return None
+    
+    # Country detection patterns
+    country_patterns = [
+        # Common country names
+        (r'\b(?:United States|USA|U\.S\.A\.|US)\b', 'United States'),
+        (r'\b(?:Mexico|México|Mex)\b', 'Mexico'),
+        (r'\b(?:Canada|CAN|Ca)\b', 'Canada'),
+        (r'\b(?:United Kingdom|UK|U\.K\.|Great Britain|England|Scotland|Wales|Northern Ireland)\b', 'United Kingdom'),
+        (r'\b(?:France|FR|FRA)\b', 'France'),
+        (r'\b(?:Germany|DE|DEU|Deutschland)\b', 'Germany'),
+        (r'\b(?:Spain|ES|ESP|España)\b', 'Spain'),
+        (r'\b(?:Italy|IT|ITA|Italia)\b', 'Italy'),
+        (r'\b(?:Russia|RU|RUS|Russian Federation|Россия)\b', 'Russia'),
+        (r'\b(?:Japan|JP|JPN|日本)\b', 'Japan'),
+        (r'\b(?:China|CN|CHN|中国)\b', 'China'),
+        (r'\b(?:Brazil|BR|BRA|Brasil)\b', 'Brazil'),
+        (r'\b(?:Australia|AU|AUS)\b', 'Australia'),
+        (r'\b(?:India|IN|IND)\b', 'India'),
+        (r'\b(?:South Korea|Korea|KR|KOR|한국|대한민국)\b', 'South Korea'),
+        
+        # Country codes (ISO 3166-1 alpha-3)
+        (r'\bMEX\b', 'Mexico'),
+        (r'\bGBR\b', 'United Kingdom'),
+        (r'\bFRA\b', 'France'),
+        (r'\bDEU\b', 'Germany'),
+        (r'\bESP\b', 'Spain'),
+        (r'\bITA\b', 'Italy'),
+        (r'\bRUS\b', 'Russia'),
+        (r'\bJPN\b', 'Japan'),
+        (r'\bCHN\b', 'China'),
+        (r'\bBRA\b', 'Brazil'),
+        (r'\bAUS\b', 'Australia'),
+        (r'\bIND\b', 'India'),
+        (r'\bKOR\b', 'South Korea'),
+    ]
+    
+    # First try to find country in address
+    for pattern, country in country_patterns:
+        if re.search(pattern, address, re.IGNORECASE):
+            return country
+    
+    # If no country found, try to extract from common patterns
+    # Look for city, state/province patterns that might indicate country
+    if re.search(r'\b(?:Paris|Lyon|Marseille|Nice|Toulouse)\b', address, re.IGNORECASE):
+        return 'France'
+    elif re.search(r'\b(?:Berlin|Munich|Hamburg|Frankfurt|Cologne)\b', address, re.IGNORECASE):
+        return 'Germany'
+    elif re.search(r'\b(?:Madrid|Barcelona|Valencia|Seville|Bilbao)\b', address, re.IGNORECASE):
+        return 'Spain'
+    elif re.search(r'\b(?:Rome|Milan|Naples|Turin|Florence)\b', address, re.IGNORECASE):
+        return 'Italy'
+    elif re.search(r'\b(?:Moscow|St\. Petersburg|Saint Petersburg|Novosibirsk|Yekaterinburg)\b', address, re.IGNORECASE):
+        return 'Russia'
+    elif re.search(r'\b(?:Tokyo|Osaka|Kyoto|Yokohama|Nagoya)\b', address, re.IGNORECASE):
+        return 'Japan'
+    elif re.search(r'\b(?:Beijing|Shanghai|Guangzhou|Shenzhen|Chengdu)\b', address, re.IGNORECASE):
+        return 'China'
+    
+    return None
+
 def check_if_currency_needed(state: GraphState):
     """Check if currency conversion is needed for this query"""
     question = state["question"].lower()
@@ -135,7 +242,7 @@ def check_if_currency_needed(state: GraphState):
         'total', 'balance', 'saldo', 'money', 'dinero',
         'dollar', 'dólar', 'euro', 'peso', 'currency', 'moneda',
         'convert', 'conversión', 'exchange', 'cambio',
-        'usd', 'eur', 'mxn', 'gbp', 'jpy'
+        'usd', 'eur', 'mxn', 'gbp', 'jpy', 'rub'
     ]
     
     # Check if any keyword is in the question
@@ -213,9 +320,37 @@ def retrieve_documents(state: GraphState):
     return {"documents": unique_docs[:SEARCH_K]}
 
 def format_context(state: GraphState):
-    """Format retrieved documents into context"""
+    """Format retrieved documents into context and extract shipping address"""
     formatted_context = format_docs(state["documents"])
-    return {"context": formatted_context}
+    
+    # Extract shipping address from context
+    shipping_address = extract_shipping_address(formatted_context)
+    
+    # Extract country from address
+    destination_country = None
+    dest_currency = "USD"
+    
+    if shipping_address and CURRENCY_ENABLED and currency_exchanger:
+        # Try to get country from address
+        destination_country = extract_country_from_address(shipping_address)
+        
+        if destination_country:
+            # Get currency for country
+            try:
+                dest_currency = currency_exchanger.get_currency_for_country(destination_country)
+            except:
+                # Fallback to address-based detection
+                dest_currency = currency_exchanger.get_currency_for_address(shipping_address)
+        else:
+            # Fallback if no country detected
+            dest_currency = currency_exchanger.get_currency_for_address(shipping_address)
+    
+    return {
+        "context": formatted_context,
+        "shipping_address": shipping_address,
+        "destination_country": destination_country,
+        "dest_currency": dest_currency
+    }
 
 def generate_answer(state: GraphState):
     """Generate final answer using context with optional currency conversion"""
@@ -223,90 +358,52 @@ def generate_answer(state: GraphState):
     context = state["context"]
     question = state["question"]
     should_convert = state.get("should_convert_currency", False)
+    shipping_address = state.get("shipping_address")
+    destination_country = state.get("destination_country")
+    dest_currency = state.get("dest_currency", "USD")
     
-    # Determine target currency based on question
-    target_currency = "USD"
+    # Create the prompt with all required variables
+    prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
     
-    # Check if user specified a different target currency
-    question_lower = question.lower()
-    if 'euro' in question_lower or 'eur' in question_lower:
-        target_currency = "EUR"
-    elif 'peso' in question_lower or 'mxn' in question_lower:
-        target_currency = "MXN"
-    elif 'pound' in question_lower or 'gbp' in question_lower:
-        target_currency = "GBP"
-    elif 'yen' in question_lower or 'jpy' in question_lower:
-        target_currency = "JPY"
+    # Prepare variables for the template
+    template_vars = {
+        "context": context,
+        "question": question,
+        "shipping_address": shipping_address or "Not specified"
+    }
     
-    # Extract and convert currencies from the GENERATED ANSWER (not from context)
+    # Generate answer
+    chain = prompt | generation_llm
+    initial_answer = chain.invoke(template_vars).content
+    
+    # Apply currency conversion if needed
     conversions = []
+    final_answer = initial_answer
+    
     if should_convert and CURRENCY_ENABLED and currency_exchanger:
-        # First generate answer without currency conversion
-        prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
-        chain = prompt | generation_llm
-        initial_answer = chain.invoke({
-            "context": context,
-            "question": question
-        }).content
-        
-        # Extract currency amounts from the generated answer
-        try:
-            conversions = currency_exchanger.extract_and_convert_amounts(
-                initial_answer, 
-                target_currency=target_currency
-            )
-        except Exception as e:
-            print(f"Error in currency conversion: {e}")
-            conversions = []
-        
-        # Generate enhanced answer with conversions
-        if conversions:
-            # Create a new prompt that includes conversion instructions
-            enhanced_prompt = RAG_TEMPLATE + """
-            
-            ADDITIONAL CURRENCY INSTRUCTIONS:
-            Your answer contains monetary amounts. For each monetary amount in your answer:
-            1. Include the original currency and amount
-            2. Add the equivalent in {target_currency} in parentheses
-            3. Use the following conversions:
-            {currency_conversions}
-            
-            Example format: "The invoice total was €100 (approximately $110 USD)"
-            
-            Make sure the conversions are accurate and clearly presented.
-            """
-            
-            # Format currency conversions for the prompt
-            conv_text = "Currency conversions found in your answer:\n"
-            for conv in conversions:
-                conv_text += f"- {conv['original_amount']} {conv['original_currency']} = {conv['converted_amount']} {target_currency} (rate: {conv['rate']})\n"
-            
-            prompt = ChatPromptTemplate.from_template(enhanced_prompt)
-            chain = prompt | generation_llm
-            response = chain.invoke({
-                "context": context,
-                "question": question,
-                "currency_conversions": conv_text,
-                "target_currency": target_currency
-            })
-            
-            final_answer = response.content
-        else:
-            final_answer = initial_answer
-    else:
-        # Generate normal answer without currency conversion
-        prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
-        chain = prompt | generation_llm
-        response = chain.invoke({
-            "context": context,
-            "question": question
-        })
-        final_answer = response.content
+        if shipping_address and shipping_address != "Not specified":
+            try:
+                # Enhance answer with conversion
+                final_answer = currency_exchanger.enhance_answer_with_conversion(
+                    initial_answer, 
+                    shipping_address
+                )
+                
+                # Also extract conversions for display
+                conversions = currency_exchanger.extract_and_convert_amounts(
+                    initial_answer,
+                    target_currency=dest_currency
+                )
+            except Exception as e:
+                print(f"Error in currency conversion: {e}")
+                final_answer = initial_answer + f"\n\n*Note: Currency conversion failed: {str(e)}*"
     
     return {
         "answer": final_answer, 
-        "currency_conversions": conversions if should_convert else [],
-        "target_currency": target_currency if should_convert else None
+        "currency_conversions": conversions,
+        "dest_currency": dest_currency if should_convert else None,
+        "shipping_address": shipping_address,
+        "destination_country": destination_country
     }
 
 def build_rag_graph():
@@ -359,7 +456,10 @@ def query_rag(question):
             "generation_llm": generation_llm,
             "vector_store": vector_store,
             "currency_conversions": [],
-            "should_convert_currency": False
+            "should_convert_currency": False,
+            "shipping_address": None,
+            "destination_country": None,
+            "dest_currency": "USD"
         }
         
         # Execute the graph
@@ -396,7 +496,8 @@ def get_retriever_info():
     
     # Add currency info
     if CURRENCY_ENABLED:
-        info["currency"] = "Enabled (Smart detection)"
+        info["currency"] = "Enabled (Destination-based)"
+        info["currency_logic"] = "Converts to shipping destination currency"
         if os.getenv("EXCHANGERATE_API_KEY"):
             info["currency_api"] = "ExchangeRate-API"
         else:
