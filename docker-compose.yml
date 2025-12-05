@@ -14,7 +14,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - WEAVIATE_HOST=weaviate
-      - WEAVIATE_PORT=8080
+      - WEAVIATE_PORT=8088
     depends_on:
       - weaviate
     networks:
@@ -26,12 +26,12 @@ services:
     - --host
     - 0.0.0.0
     - --port
-    - '8080'
+    - '8088'
     - --scheme
     - http
     image: cr.weaviate.io/semitechnologies/weaviate:1.34.0
     ports:
-    - 8080:8080
+    - 8088:8088
     - 50051:50051
     volumes:
     - ./data:/var/lib/weaviate

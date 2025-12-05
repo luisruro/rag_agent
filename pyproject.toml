@@ -15,5 +15,7 @@ dependencies = [
     "streamlit",
     "weaviate-client",
     "tqdm",
-    "langchain-classic"
+    "langchain-classic",
+    "langgraph",
+    "requests"
 ]
