@@ -172,24 +172,6 @@ class CurrencyExchange:
             
         return "USD"  # Default currency
     
-<<<<<<< HEAD
-    def extract_and_convert_amounts(self, text, target_currency="USD"):
-        """Extract monetary amounts from text and convert to target currency"""
-        # Enhanced pattern to find amounts with various formats
-        patterns = [
-            # Pattern for symbol before amount: $1,234.56, €1.234,56, £1,234
-            r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)',
-            
-            # Pattern for amount before symbol: 1,234.56 USD, 1.234,56 EUR
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([A-Z]{2,3})',
-            
-            # Pattern for amount before symbol with $: 1,234.56 $
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([\$€£¥])',
-            
-            # Pattern for spelled out currencies: 1,234.56 dollars, 1.234,56 euros
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*(dollars?|euros?|pounds?|pesos?)',
-        ]
-=======
     def extract_and_convert_amounts(self, text, target_currency="USD", strict_mode=True):
         """
         Extract monetary amounts from text and convert to target currency
@@ -222,18 +204,20 @@ class CurrencyExchange:
                 r'(?:total|price|amount|cost|balance|due|subtotal|discount|shipping|fee)[\s:]+\$\s*([\d,]+\.?\d*)',
             ]
         else:
-            # LOOSE MODE: Extract any number that might be money (not recommended)
+            # LOOSE MODE: Extract any number that might be money
             patterns = [
-                # Symbol before amount
-                r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+\.?\d*)',
+                # Pattern for symbol before amount: $1,234.56, €1.234,56, £1,234
+                r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)',
                 
-                # Amount before symbol/code
-                r'([\d,]+\.?\d*)\s*([A-Z]{2,3}|[\$€£¥])',
+                # Pattern for amount before symbol: 1,234.56 USD, 1.234,56 EUR
+                r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([A-Z]{2,3})',
                 
-                # Spelled out currencies
-                r'([\d,]+\.?\d*)\s*(dollars?|euros?|pounds?|pesos?)',
+                # Pattern for amount before symbol with $: 1,234.56 $
+                r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([\$€£¥])',
+                
+                # Pattern for spelled out currencies: 1,234.56 dollars, 1.234,56 euros
+                r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*(dollars?|euros?|pounds?|pesos?)',
             ]
->>>>>>> c9c10295d1fb09aead291d31c9ec359d40a19360
         
         conversions = []
         seen_amounts = set()  # Track amounts we've already processed
@@ -569,7 +553,7 @@ class CurrencyExchange:
             }
         
         # Extract and convert amounts
-        conversions = self.extract_and_convert_amounts(invoice_text, dest_currency)
+        conversions = self.extract_and_convert_amounts(invoice_text, dest_currency, strict_mode=False)
         
         if not conversions:
             return {
@@ -618,8 +602,8 @@ class CurrencyExchange:
         if dest_currency == "USD":
             return answer
         
-        # Extract amounts from answer
-        conversions = self.extract_and_convert_amounts(answer, dest_currency)
+        # Extract amounts from answer - use strict_mode=False to catch all amounts
+        conversions = self.extract_and_convert_amounts(answer, dest_currency, strict_mode=False)
         
         if not conversions:
             return answer
