@@ -273,26 +273,51 @@ def detect_specific_query(question: str) -> bool:
     """
     question_lower = question.lower()
     
+    # Clean up common typos
+    question_lower = question_lower.replace('ant ', 'and ')
+    question_lower = question_lower.replace('inovice', 'invoice')
+    
+    print(f"DEBUG detect_specific_query: '{question_lower}'")
+    
     # If asking for "all" or multiple invoices, it's NOT specific
     if any(keyword in question_lower for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice']):
+        print("DEBUG: NOT specific - asking for multiple invoices")
         return False
     
+    # Check if asking for specific fields - EXPANDED TO INCLUDE "due"
+    specific_fields = ['product', 'quantity', 'amount', 'total', 'price', 'cost', 'balance', 'date', 'number', 'invoice', 'due']
+    field_count = 0
+    for field in specific_fields:
+        if field in question_lower:
+            field_count += 1
+            print(f"DEBUG: Found specific field '{field}'")
+    
+    # If asking for 1-4 specific fields, it's specific
+    if 1 <= field_count <= 4:
+        print(f"DEBUG: Detected {field_count} specific field(s) in query -> SPECIFIC")
+        return True
+    
     specific_patterns = [
+        r'\bget\s+(?:the|me)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "get the total due"
+        r'\bshow\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "show me the total due"
+        r'\btell\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "tell me the amount"
+        r'\bwhat\s+(?:is|are)\s+(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "what is the total due"
         r'\bjust\b.*\bthe\b',           # "just the balance"
         r'\bonly\b.*\bthe\b',           # "only the amount"
-        r'\bwhat\s+is\s+the\b',         # "what is the balance"
-        r'\bwhat\'?s\s+the\b',          # "what's the total"
         r'\bhow\s+much\b',              # "how much is"
-        r'\bget\s+(?:me\s+)?the\b',     # "get the invoice number"
-        r'\bshow\s+(?:me\s+)?the\b',    # "show the date"
-        r'\btell\s+me\s+the\b',         # "tell me the amount"
-        r'\bgive\s+me\s+the\b',         # "give me the balance"
+        r'\bproduct.*quantity.*total\b', # "product, quantity, and total"
+        r'\bget the.*product.*quantity.*total\b',  # "get the product, quantity, and total"
+        r'\btotal\s+due\b',             # "total due"
+        r'\bwhat.*total.*due\b',        # "what is the total due"
+        r'\bshow.*total.*due\b',        # "show me the total due"
     ]
     
     for pattern in specific_patterns:
         if re.search(pattern, question_lower):
+            print(f"DEBUG: Matched specific pattern '{pattern}' -> SPECIFIC")
             return True
     
+    print("DEBUG: No specific patterns matched -> GENERAL")
     return False
 
 def detect_country_from_context(context: str) -> str:
@@ -424,21 +449,23 @@ def format_context_node(state: GraphState) -> GraphState:
         content = doc.page_content.strip()
         formatted.append(f'{header}\n{content}')
     
-        # Store only top 5 most relevant docs for UI display
-        TOP_DOCS_FOR_UI = 5
-        for i, doc in enumerate(docs[:TOP_DOCS_FOR_UI], 1):
-            doc_info = {
-                "fragment": i,
-                "content": doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,
-                "source": doc.metadata.get('source', 'Not specified').split("\\")[-1] if doc.metadata.get('source') else 'Not specified',
-                "page": doc.metadata.get('page_label', 'Not specified')
-            }
-            docs_info.append(doc_info)
+    # Store only top 5 most relevant docs for UI display
+    TOP_DOCS_FOR_UI = 5
+    for i, doc in enumerate(docs[:TOP_DOCS_FOR_UI], 1):
+        doc_info = {
+            "fragment": i,
+            "content": doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,
+            "source": doc.metadata.get('source', 'Not specified').split("\\")[-1] if doc.metadata.get('source') else 'Not specified',
+            "page": doc.metadata.get('page_label', 'Not specified')
+        }
+        docs_info.append(doc_info)
     
     formatted_context = "\n\n".join(formatted)
     
     # Extract shipping address using HEAD function
     shipping_address = extract_shipping_address(formatted_context)
+    print(f"DEBUG: Extracted shipping address: '{shipping_address}'")
+    
     destination_country = None
     dest_currency = "USD"
     
@@ -447,6 +474,7 @@ def format_context_node(state: GraphState) -> GraphState:
         if destination_country:
             try:
                 dest_currency = currency_exchanger.get_currency_for_country(destination_country)
+                print(f"DEBUG: Destination currency set to: {dest_currency}")
             except:
                 dest_currency = currency_exchanger.get_currency_for_address(shipping_address)
         else:
@@ -532,35 +560,124 @@ def generate_response_node(state: GraphState) -> GraphState:
     structured_invoice = state.get("structured_invoice")
     shipping_address = state.get("shipping_address", "Not specified")
     
-    # Check if we have structured data
-    print(f"DEBUG: structured_invoice = {structured_invoice is not None}")
-    print(f"DEBUG: is_specific = {is_specific}")
+    print(f"DEBUG PATH CHECK: is_specific={is_specific}, structured_invoice={structured_invoice is not None}")
+    print(f"DEBUG: Shipping address='{shipping_address}'")
+    
+    # ===== FOR SPECIFIC QUERIES =====
+    # FORCE specific queries to use the specific template, NOT structured data
+    if is_specific:
+        print("FORCING SPECIFIC QUERY PATH - using specific template only")
+        
+        # Use the specific template
+        selected_template = RAG_TEMPLATE_SPECIFIC
+        
+        # Create RAG prompt
+        rag_prompt = PromptTemplate.from_template(selected_template)
+        
+        # Generate response
+        rag_chain = rag_prompt | llm_generation | StrOutputParser()
+        response = rag_chain.invoke({
+            "context": context,
+            "question": question,
+            "shipping_address": shipping_address
+        })
+        
+        # Clean up the response - remove any "Answer:" or "Answer to the Question:" prefixes
+        response = re.sub(r'^(Answer\s*(?:to\s+the\s+Question)?:\s*)?', '', response, flags=re.IGNORECASE)
+        response = response.strip()
+        
+        print(f"DEBUG Specific response (cleaned): {response[:200]}...")
+        
+        # Apply currency conversion if needed - ALWAYS TRY FOR SPECIFIC QUERIES WITH MONETARY AMOUNTS
+        conversions = []
+        
+        # Check if response contains monetary amounts
+        has_monetary = bool(re.search(r'\$\d+[\d,]*\.?\d*', response))
+        print(f"DEBUG: Response has monetary amounts: {has_monetary}")
+        
+        if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
+            try:
+                print(f"DEBUG: Attempting currency conversion for: {shipping_address}")
+                enhanced_response = currency_exchanger.enhance_answer_with_conversion(
+                    response, 
+                    shipping_address
+                )
+                
+                # Check if conversion actually happened
+                if enhanced_response != response:
+                    response = enhanced_response
+                    print("DEBUG: Currency conversion applied successfully")
+                else:
+                    print("DEBUG: Currency conversion didn't change response")
+                
+                # Extract conversions for display
+                dest_currency = state.get("dest_currency", "USD")
+                if dest_currency != "USD":
+                    raw_conversions = currency_exchanger.extract_and_convert_amounts(
+                        response,
+                        target_currency=dest_currency,
+                        strict_mode=True
+                    )
+                    
+                    # Deduplicate conversions
+                    seen_amounts = set()
+                    for conv in raw_conversions:
+                        amount_key = f"{conv['original_amount']:.2f}"
+                        if amount_key not in seen_amounts:
+                            seen_amounts.add(amount_key)
+                            conversions.append({
+                                "original_amount": f"{conv['original_amount']:.2f}",
+                                "original_currency": conv["original_currency"],
+                                "converted_amount": f"{conv['converted_amount']:.2f}",
+                                "target_currency": conv["target_currency"],
+                                "rate": f"{conv['rate']:.4f}"
+                            })
+                    
+                    print(f"DEBUG: Extracted {len(conversions)} conversions for display")
+            except Exception as e:
+                print(f"Currency conversion error: {e}")
+                # Add error note to response if conversion failed
+                if has_monetary:
+                    response = response + f"\n\n*Note: Could not convert currency: {str(e)}*"
+        elif has_monetary and (not shipping_address or shipping_address == "Not specified"):
+            print("DEBUG: Has monetary amounts but no shipping address found")
+            response = response + "\n\n*Note: Shipping address not found - showing original currency only*"
+        
+        print("Response generated (SPECIFIC template path)")
+        
+        return {
+            "response": response,
+            "currency_conversions": conversions
+        }
+    
+    # ===== FOR GENERAL QUERIES =====
+    # Only use structured data for general queries
+    print("GENERAL QUERY - using structured data if available")
     
     # Try to use structured data first
     if structured_invoice:
         print("Using structured invoice data (Pydantic model)")
         response = format_invoice_response(structured_invoice, question, is_specific)
         
+        # Apply currency conversion to structured response if shipping address exists
+        if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
+            try:
+                print(f"DEBUG: Applying currency conversion to structured response")
+                enhanced_response = currency_exchanger.enhance_answer_with_conversion(
+                    response, 
+                    shipping_address
+                )
+                if enhanced_response != response:
+                    response = enhanced_response
+                    print("DEBUG: Currency conversion applied to structured response")
+            except Exception as e:
+                print(f"Currency conversion error for structured response: {e}")
+        
         # Extract conversions from structured data
         conversions = []
-        question_lower = question.lower()
         
-        # Determine which field was asked about for specific queries
-        conv = None
-        if is_specific:
-            if "balance" in question_lower and "due" in question_lower and structured_invoice.balance_due:
-                conv = structured_invoice.balance_due
-            elif "subtotal" in question_lower and structured_invoice.subtotal:
-                conv = structured_invoice.subtotal
-            elif "discount" in question_lower and structured_invoice.discount:
-                conv = structured_invoice.discount
-            elif "shipping" in question_lower and structured_invoice.shipping:
-                conv = structured_invoice.shipping
-            elif "total" in question_lower and structured_invoice.total_amount_payable:
-                conv = structured_invoice.total_amount_payable
-        else:
-            # For general queries, show the main financial field (balance_due or total_payable)
-            conv = structured_invoice.balance_due if structured_invoice.balance_due else structured_invoice.total_amount_payable
+        # For general queries, show the main financial field
+        conv = structured_invoice.balance_due if structured_invoice.balance_due else structured_invoice.total_amount_payable
         
         # Add conversion if available
         if conv and conv.converted_amount and conv.local_currency and conv.local_currency != "USD":
@@ -583,13 +700,9 @@ def generate_response_node(state: GraphState) -> GraphState:
             "currency_conversions": conversions
         }
     
-    # Select appropriate prompt template
-    if is_specific:
-        print("Using SPECIFIC query template")
-        selected_template = RAG_TEMPLATE_SPECIFIC
-    else:
-        print("   Using GENERAL query template")
-        selected_template = RAG_TEMPLATE_GENERAL
+    # Fallback: Use general template if no structured data
+    print("No structured data - using GENERAL template")
+    selected_template = RAG_TEMPLATE_GENERAL
     
     # Create RAG prompt
     rag_prompt = PromptTemplate.from_template(selected_template)
@@ -606,7 +719,6 @@ def generate_response_node(state: GraphState) -> GraphState:
     conversions = []
     if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
         try:
-            # Use the enhance_answer_with_conversion function from HEAD
             response = currency_exchanger.enhance_answer_with_conversion(
                 response, 
                 shipping_address
@@ -636,7 +748,6 @@ def generate_response_node(state: GraphState) -> GraphState:
                         })
                 
                 print(f"Applied currency conversion for {shipping_address}")
-                print(f"Extracted {len(conversions)} unique monetary amounts from response")
         except Exception as e:
             print(f"Currency conversion error: {e}")
             response = response + f"\n\n*Note: Currency conversion failed: {str(e)}*"
@@ -743,7 +854,6 @@ def get_retriever_info():
         "umbral": None
     }
     
-    # Add currency info from HEAD
     if CURRENCY_ENABLED:
         info["currency"] = "Enabled (Destination-based)"
         info["currency_logic"] = "Converts to shipping destination currency"

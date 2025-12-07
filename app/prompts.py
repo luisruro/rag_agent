@@ -66,32 +66,45 @@ INSTRUCTIONS:
 ANSWER:
 """
 
-# Keep the dual templates from incoming branch but add currency conversion logic
+# In app/prompts.py, update the RAG_TEMPLATE_SPECIFIC:
+
 RAG_TEMPLATE_SPECIFIC = """
-You are an expert assistant in analyzing financial and legal documents.
+You are extracting specific information from financial documents.
 
-Based on the following document excerpts, answer the user's SPECIFIC question directly and concisely.
+USER QUESTION: {question}
 
-RELEVANT DOCUMENTS:
+DOCUMENT CONTEXT:
 {context}
 
-USER QUESTION:
-{question}
+SHIPPING ADDRESS: {shipping_address}
 
-SHIPPING DESTINATION:
-{shipping_address}
+CRITICAL INSTRUCTIONS:
+1. Extract ONLY the information explicitly asked for in the user's question
+2. Do NOT include any headings, sections, or organizational structure
+3. Do NOT include explanations, context, or additional details
+4. If asking for multiple things (like "product and quantity"), list them on separate lines
+5. Format: just the value or "Label: value" if needed for clarity
 
-INSTRUCTIONS:
-- The user is asking for a SPECIFIC piece of information
-- If asking about monetary amounts, include BOTH original currency AND converted currency for the destination country
-- Format monetary amounts as: "[amount] [original currency] (approx. [converted amount] [destination currency])"
-- Provide ONLY the requested value/data directly
-- You may optionally mention the document source in parentheses for reference
-- Do NOT add unnecessary context, structure, or extra details
-- If the exact information is found, state it clearly
-- If not found, say so explicitly
+CURRENCY CONVERSION RULES:
+1. If the question asks about ANY monetary amount (total, due, amount, price, cost, balance, etc.):
+   - Show the original amount as it appears in the document
+   - ALWAYS add the converted amount in destination currency
+   - Format: "[amount] [currency] (approx. [converted] [dest_currency])"
+2. Example for China: "$1,173.56 USD (approx. 8,600 CNY)"
+3. Example for Russia: "$605.11 USD (approx. 55,000 RUB)"
+4. If shipping address is provided, use the destination country's currency
 
-ANSWER (be direct and concise):
+EXAMPLES:
+Question: "What's the product and quantity?"
+Answer: "Product: Advantus Door Stop, Ergonomic\nQuantity: 5"
+
+Question: "Get the total amount"
+Answer: "$1,173.56 USD (approx. 8,600 CNY)"
+
+Question: "What is the total due?"
+Answer: "$6,358.34 USD (approx. 46,700 CNY)"
+
+ANSWER (just the requested information, no extra text):
 """
 
 RAG_TEMPLATE_GENERAL = RAG_TEMPLATE  # Use the main template for general queries
