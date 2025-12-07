@@ -11,8 +11,8 @@ GENERATION_MODEL = "gpt-4o"
 # Retriever setting
 SEARCH_TYPE = "mmr"
 MMR_DIVERSITY_LAMBDA = 0.7
-MMR_FETCH_K = 100 #Initial docs before applying MMR
-SEARCH_K = 50 #Final docs after applying el MVR
+MMR_FETCH_K = 50 #Initial docs before applying MMR
+SEARCH_K = 20 #Final docs after applying el MVR
 
 WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "localhost")
 WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", 8080))
