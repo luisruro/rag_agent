@@ -168,69 +168,115 @@ class CurrencyExchange:
             
         return "USD"  # Default currency
     
-    def extract_and_convert_amounts(self, text, target_currency="USD"):
-        """Extract monetary amounts from text and convert to target currency"""
+    def extract_and_convert_amounts(self, text, target_currency="USD", strict_mode=True):
+        """
+        Extract monetary amounts from text and convert to target currency
+        
+        Args:
+            text: Text containing monetary amounts
+            target_currency: Currency to convert to
+            strict_mode: If True, only extract amounts with explicit currency symbols ($, €, etc.)
+                        If False, extract any number that looks like money
+        """
         import re
         
-        # Enhanced pattern to find amounts with various formats
-        patterns = [
-            # Pattern for symbol before amount: $1,234.56, €1.234,56, £1,234
-            r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)',
-            
-            # Pattern for amount before symbol: 1,234.56 USD, 1.234,56 EUR
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([A-Z]{2,3})',
-            
-            # Pattern for amount before symbol with $: 1,234.56 $
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*([\$€£¥])',
-            
-            # Pattern for spelled out currencies: 1,234.56 dollars, 1.234,56 euros
-            r'([\d,]+(?:\.\d{2,})?(?:\.\d{3})*(?:,\d{2})?)\s*(dollars?|euros?|pounds?|pesos?)',
-        ]
+        print(f"   [Currency Extractor] strict_mode={strict_mode}, target={target_currency}")
+        print(f"   [Currency Extractor] Text length: {len(text)} chars")
+        print(f"   [Currency Extractor] Text sample: {text[:200]}...")
+        
+        if strict_mode:
+            # STRICT MODE: Only extract amounts with explicit currency symbols
+            patterns = [
+                # Pattern 1: Symbol directly before amount (no space or with space): $1,234.56 or $ 1234.56
+                r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+\.?\d*)',
+                
+                # Pattern 2: Amount followed by currency CODE: 1,234.56 USD
+                r'([\d,]+\.?\d*)\s+(USD|EUR|GBP|MXN|COP|CAD|AUD|JPY|CHF|CNY|INR|BRL|ZAR)\b',
+                
+                # Pattern 3: Amount with $ after (less common but valid): 1,234.56$
+                r'([\d,]+\.?\d*)\s*\$(?!\d)',
+                
+                # Pattern 4: "Total: $X" or "Price: $X" patterns
+                r'(?:total|price|amount|cost|balance|due|subtotal|discount|shipping|fee)[\s:]+\$\s*([\d,]+\.?\d*)',
+            ]
+        else:
+            # LOOSE MODE: Extract any number that might be money (not recommended)
+            patterns = [
+                # Symbol before amount
+                r'([\$€£¥]|US\$|MX\$|COL\$|AUS\$|CAD\$)\s*([\d,]+\.?\d*)',
+                
+                # Amount before symbol/code
+                r'([\d,]+\.?\d*)\s*([A-Z]{2,3}|[\$€£¥])',
+                
+                # Spelled out currencies
+                r'([\d,]+\.?\d*)\s*(dollars?|euros?|pounds?|pesos?)',
+            ]
         
         conversions = []
+        seen_amounts = set()  # Track amounts we've already processed
         
         for pattern in patterns:
             try:
                 matches = re.finditer(pattern, text, re.IGNORECASE)
                 for match in matches:
-                    # Determine which group is amount and which is currency
                     groups = match.groups()
                     
-                    # Find the amount (the group that looks like a number)
-                    amount_str = None
-                    currency_indicator = None
-                    
-                    for i, group in enumerate(groups):
-                        if group and any(c.isdigit() for c in group):
-                            # Clean and test if it's a valid number
-                            test_str = group.replace(',', '').replace('.', '')
-                            if test_str.isdigit() or ('.' in group and group.replace(',', '').replace('.', '', 1).isdigit()):
-                                amount_str = group
-                                currency_indicator = groups[0] if i == 1 else groups[1]
-                                break
+                    # Handle special pattern 4 (only captures amount)
+                    if len(groups) == 1 and groups[0] and any(c.isdigit() for c in groups[0]):
+                        amount_str = groups[0]
+                        currency_indicator = "$"  # Default to $ for pattern 4
+                    else:
+                        # Determine which group is amount and which is currency
+                        amount_str = None
+                        currency_indicator = None
+                        
+                        for i, group in enumerate(groups):
+                            if group and any(c.isdigit() for c in group):
+                                # This looks like an amount
+                                test_str = group.replace(',', '').replace('.', '')
+                                if test_str.isdigit() or (group.count('.') <= 1 and group.replace(',', '').replace('.', '', 1).isdigit()):
+                                    amount_str = group
+                                    currency_indicator = groups[1] if i == 0 else groups[0]
+                                    break
                     
                     if not amount_str or not currency_indicator:
                         continue
                     
-                    # Clean amount string (handle different decimal separators)
+                    # Clean amount string
                     amount_clean = amount_str.replace(',', '')
                     
                     # Handle European format (1.234,56 -> 1234.56)
-                    if '.' in amount_clean and ',' in amount_str:
-                        # Check if . is thousand separator
-                        parts = amount_str.split('.')
-                        if len(parts[-1].replace(',', '')) == 2 and ',' in parts[-1]:
+                    if ',' in amount_str and '.' in amount_str:
+                        # Check if . is thousand separator and , is decimal
+                        if amount_str.index(',') > amount_str.rindex('.'):
                             # European format: 1.234,56
                             amount_clean = amount_str.replace('.', '').replace(',', '.')
-                        else:
-                            # US format: 1,234.56
-                            amount_clean = amount_str.replace(',', '')
                     
                     try:
                         amount = float(amount_clean)
                         
+                        # Skip very small amounts (likely not money, maybe quantities)
+                        if amount < 0.01:
+                            continue
+                        
+                        # Skip if we've already processed this amount
+                        amount_key = f"{amount:.2f}"
+                        if amount_key in seen_amounts:
+                            continue
+                        
+                        # In strict mode, verify currency symbol is present
+                        if strict_mode:
+                            has_currency_symbol = any(sym in currency_indicator for sym in ['$', '€', '£', '¥']) or \
+                                                 any(code in currency_indicator.upper() for code in ['USD', 'EUR', 'GBP', 'MXN', 'COP', 'CAD', 'AUD'])
+                            if not has_currency_symbol:
+                                continue
+                        
+                        seen_amounts.add(amount_key)
+                        
                         # Detect currency
                         from_currency = self.detect_currency(currency_indicator)
+                        
+                        print(f"   [Currency Extractor] Found: {amount} {from_currency} (from indicator: '{currency_indicator}')")
                         
                         # Convert amount
                         converted_amount = self.convert_amount(amount, from_currency, target_currency)
@@ -257,6 +303,7 @@ class CurrencyExchange:
                 print(f"Error in regex pattern {pattern}: {e}")
                 continue
         
+        print(f"   [Currency Extractor] Total conversions found: {len(conversions)}")
         return conversions
 
 # Singleton instance
