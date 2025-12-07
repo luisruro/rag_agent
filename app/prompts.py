@@ -1,6 +1,6 @@
 # app/prompts.py
 
-# Base RAG template with currency conversion instructions
+# Base RAG template with currency conversion instructions - KEEPING THIS FROM HEAD
 RAG_TEMPLATE = """You are an expert assistant in analyzing financial and legal documents with intelligent currency conversion.
 Your task is to interpret and answer questions about invoices, promissory notes, and credit agreements with automatic currency conversion to the destination country's currency.
 
@@ -63,7 +63,38 @@ INSTRUCTIONS:
    - Show complex conversion calculations.
    - Convert to currencies other than the destination country's currency.
 
-ANSWER:"""
+ANSWER:
+"""
+
+# Keep the dual templates from incoming branch but add currency conversion logic
+RAG_TEMPLATE_SPECIFIC = """
+You are an expert assistant in analyzing financial and legal documents.
+
+Based on the following document excerpts, answer the user's SPECIFIC question directly and concisely.
+
+RELEVANT DOCUMENTS:
+{context}
+
+USER QUESTION:
+{question}
+
+SHIPPING DESTINATION:
+{shipping_address}
+
+INSTRUCTIONS:
+- The user is asking for a SPECIFIC piece of information
+- If asking about monetary amounts, include BOTH original currency AND converted currency for the destination country
+- Format monetary amounts as: "[amount] [original currency] (approx. [converted amount] [destination currency])"
+- Provide ONLY the requested value/data directly
+- You may optionally mention the document source in parentheses for reference
+- Do NOT add unnecessary context, structure, or extra details
+- If the exact information is found, state it clearly
+- If not found, say so explicitly
+
+ANSWER (be direct and concise):
+"""
+
+RAG_TEMPLATE_GENERAL = RAG_TEMPLATE  # Use the main template for general queries
 
 # Simplified version for LLM processing (used in rag_system.py)
 RAG_SIMPLE_TEMPLATE = """You are an expert assistant analyzing financial documents.
@@ -106,7 +137,7 @@ INSTRUCTIONS:
 
 ANSWER:"""
 
-# MultiQueryRetriever prompt (unchanged - this is for query generation, not response)
+# MultiQueryRetriever prompt
 MULTI_QUERY_PROMPT = """
 You are an expert in analyzing financial and legal documents.
 Your task is to generate multiple versions of the user's query to retrieve relevant excerpts from invoices, promissory notes, and credit contracts from a vector database.
@@ -123,7 +154,7 @@ Original query: {question}
 Generate exactly 3 alternative versions of this query, one per line, without numbering or bullet points:
 """
 
-# Currency-specific prompts
+# Currency-specific prompts - KEEPING THESE FROM HEAD
 CURRENCY_CONVERSION_PROMPT = """
 You are a currency conversion specialist. Your task is to enhance a financial answer with currency conversion.
 
@@ -152,7 +183,7 @@ INSTRUCTIONS:
 ENHANCED ANSWER:
 """
 
-# Prompt for extracting shipping address
+# Prompt for extracting shipping address - KEEPING FROM HEAD
 EXTRACT_SHIPPING_PROMPT = """
 Extract the shipping address or destination from the following text.
 If no shipping address is found, return "Not found".

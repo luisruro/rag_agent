@@ -17,5 +17,6 @@ dependencies = [
     "tqdm",
     "langchain-classic",
     "langgraph",
-    "requests"
+    "requests",
+    "pydantic"
 ]

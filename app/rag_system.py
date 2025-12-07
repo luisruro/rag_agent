@@ -1,25 +1,24 @@
 # app/rag_system.py
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
-from langchain_core.prompts import ChatPromptTemplate
-from langgraph.graph import StateGraph, END
-from typing import TypedDict, List
-import streamlit as st
-
+from typing import TypedDict, List, Dict, Optional
+from langgraph.graph import StateGraph, END, START
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from langchain_weaviate.vectorstores import WeaviateVectorStore
 import weaviate
-
 import os
-from dotenv import load_dotenv
 import re
+from dotenv import load_dotenv
 
 from config import *
 from prompts import *
+from currency_exchange import currency_exchanger
+from invoice_model import Invoice
+from structured_extraction import extract_structured_invoice, format_invoice_response
 
-# Load environment variables
 load_dotenv()
 
-# Try to import currency_exchange with error handling
+# Try to import currency_exchange with error handling - KEEPING FROM HEAD
 CURRENCY_ENABLED = False
 currency_exchanger = None
 
@@ -66,82 +65,98 @@ except Exception as e:
             return answer
     currency_exchanger = DummyCurrencyExchanger()
 
-# Define state schema
+# State definition - KEEPING MODERN VERSION FROM INCOMING BRANCH BUT ADDING CURRENCY FIELDS
 class GraphState(TypedDict):
-    """State for the RAG graph"""
+    """State of the graph"""
     question: str
-    queries: List[str]
-    documents: List[dict]
-    context: str
-    answer: str
-    query_llm: ChatOpenAI
-    generation_llm: ChatOpenAI
-    vector_store: WeaviateVectorStore
-    currency_conversions: List[dict]
+    is_specific_query: bool
+    generated_queries: List[str]
+    documents: List
+    formatted_context: str
+    detected_country: str
+    target_currency: str
+    structured_invoice: Optional[Invoice]
+    currency_conversions: List[Dict]
+    response: str
+    docs_info: List[dict]
+    # Adding currency-specific fields from HEAD
     should_convert_currency: bool
     shipping_address: str
     destination_country: str
     dest_currency: str
+    
+client = weaviate.connect_to_local(
+    host=WEAVIATE_HOST,
+    port=WEAVIATE_PORT
+)
 
-# Initialize components
-@st.cache_resource
-def initialize_components():
-    """Initialize all components once"""
-    # Weaviate connection
-    client = weaviate.connect_to_local(
-        host=WEAVIATE_HOST,
-        port=WEAVIATE_PORT
-    )
-    
-    # Create embeddings
-    embedding = OpenAIEmbeddings(
-        model=EMBEDDING_MODEL,
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-    
-    # Create vector store
-    vector_store = WeaviateVectorStore(
-        client=client,
-        index_name="DocumentChunk",
-        text_key="text",
-        embedding=embedding
-    )
-    
-    # LLMs
-    query_llm = ChatOpenAI(
-        model=QUERY_MODEL,
-        temperature=0,
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-    
-    generation_llm = ChatOpenAI(
-        model=GENERATION_MODEL,
-        temperature=0,
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-    
-    return vector_store, query_llm, generation_llm, client, embedding
+embedding = OpenAIEmbeddings(
+    model=EMBEDDING_MODEL,
+    api_key=os.getenv("OPENAI_API_KEY")
+)
 
-def format_docs(docs):
-    """Format documents for context"""
-    formatted = []
-    
-    for i, doc in enumerate(docs, 1):
-        header = f'[Fragment {i}]'
-        if doc.metadata:
-            if 'source' in doc.metadata:
-                source = doc.metadata['source'].split("\\")[-1] if '\\' in doc.metadata['source'] else doc.metadata['source']
-                header += f' - Source: {source}'
-            if 'page_label' in doc.metadata:
-                header += f" - Pagina: {doc.metadata['page_label']}"
-                
-        content = doc.page_content.strip()
-        formatted.append(f'{header}\n{content}')
-        
-    return "\n\n".join(formatted)
+vector_store = WeaviateVectorStore(
+    client=client,
+    index_name="DocumentChunk",
+    text_key="text",
+    embedding=embedding
+)
+
+llm_queries = ChatOpenAI(model=QUERY_MODEL, temperature=0)
+llm_generation = ChatOpenAI(model=GENERATION_MODEL, temperature=0)
+
+# Retriever with MMR
+base_retriever = vector_store.as_retriever(
+    search_type=SEARCH_TYPE,
+    search_kwargs={
+        "k": SEARCH_K,
+        "lambda_mult": MMR_DIVERSITY_LAMBDA,
+        "fetch_k": MMR_FETCH_K
+    }
+)
+
+COUNTRY_CURRENCY_MAP = {
+    "russia": "RUB",
+    "dominican republic": "DOP",
+    "pakistan": "PKR",
+    "australia": "AUD",
+    "germany": "EUR",
+    "austria": "EUR",
+    "turkey": "TRY",
+    "liberia": "LRD",
+    "sweden": "SEK",
+    "zambia": "ZMW",
+    "china": "CNY",
+    "cote d'ivoire": "XOF",
+    "india": "INR",
+    "new zealand": "NZD",
+    "bangladesh": "BDT",
+    "spain": "EUR",
+    "france": "EUR",
+    "brazil": "BRL",
+    "guatemala": "GTQ",
+    "mexico": "MXN",
+    "méxico": "MXN",
+    "canada": "CAD",
+    "united kingdom": "GBP",
+    "uk": "GBP",
+    "germany": "EUR",
+    "france": "EUR",
+    "spain": "EUR",
+    "italy": "EUR",
+    "colombia": "COP",
+    "argentina": "ARS",
+    "chile": "CLP",
+    "peru": "PEN",
+    "brazil": "BRL",
+    "usa": "USD",
+    "united states": "USD",
+}
+
+# ===== FUNCTIONS FROM HEAD VERSION (CURRENCY LOGIC) =====
 
 def extract_shipping_address(context):
-    """Extract shipping address from context"""
+    """Extract shipping address from context - FROM HEAD"""
     # Look for shipping address patterns
     patterns = [
         r'Ship To:\s*(.+?)(?:\n|$)',
@@ -168,7 +183,7 @@ def extract_shipping_address(context):
     return None
 
 def extract_country_from_address(address):
-    """Extract country from shipping address"""
+    """Extract country from shipping address - FROM HEAD"""
     if not address:
         return None
     
@@ -232,7 +247,7 @@ def extract_country_from_address(address):
     return None
 
 def check_if_currency_needed(state: GraphState):
-    """Check if currency conversion is needed for this query"""
+    """Check if currency conversion is needed for this query - FROM HEAD"""
     question = state["question"].lower()
     
     # Keywords that indicate currency/billing questions
@@ -245,256 +260,490 @@ def check_if_currency_needed(state: GraphState):
         'usd', 'eur', 'mxn', 'gbp', 'jpy', 'rub'
     ]
     
-    # Check if any keyword is in the question
     should_convert = any(keyword in question for keyword in currency_keywords)
     
     return {"should_convert_currency": should_convert and CURRENCY_ENABLED}
 
-def generate_query_variations(state: GraphState):
-    """Generate multiple query variations"""
-    query_llm = state['query_llm']
-    
-    prompt = ChatPromptTemplate.from_template(
-        "Generate exactly 3 different versions of this query for document retrieval:\n\n"
-        "Original: {question}\n\n"
-        "Variations (one per line, no numbering):"
-    )
-    
-    chain = prompt | query_llm
-    response = chain.invoke({"question": state["question"]})
-    
-    # Parse the response into 3 queries
-    queries = [state["question"]]  # Always include original query
-    variations = [line.strip() for line in response.content.split('\n') if line.strip()]
-    queries.extend(variations[:3])  # Add up to 3 variations
-    
-    return {"queries": queries}
+# ===== FUNCTIONS FROM INCOMING BRANCH (WITH MODIFICATIONS) =====
 
-def retrieve_documents(state: GraphState):
-    """Retrieve documents using MMR search"""
-    vector_store = state['vector_store']
-    queries = state['queries']
+def detect_specific_query(question: str) -> bool:
+    """
+    Detect if the user is asking for a specific piece of information
+    vs. a general overview
+    """
+    question_lower = question.lower()
     
+    # If asking for "all" or multiple invoices, it's NOT specific
+    if any(keyword in question_lower for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice']):
+        return False
+    
+    specific_patterns = [
+        r'\bjust\b.*\bthe\b',           # "just the balance"
+        r'\bonly\b.*\bthe\b',           # "only the amount"
+        r'\bwhat\s+is\s+the\b',         # "what is the balance"
+        r'\bwhat\'?s\s+the\b',          # "what's the total"
+        r'\bhow\s+much\b',              # "how much is"
+        r'\bget\s+(?:me\s+)?the\b',     # "get the invoice number"
+        r'\bshow\s+(?:me\s+)?the\b',    # "show the date"
+        r'\btell\s+me\s+the\b',         # "tell me the amount"
+        r'\bgive\s+me\s+the\b',         # "give me the balance"
+    ]
+    
+    for pattern in specific_patterns:
+        if re.search(pattern, question_lower):
+            return True
+    
+    return False
+
+def detect_country_from_context(context: str) -> str:
+    """Detect country from ship_to address in context"""
+    context_lower = context.lower()
+    
+    # First try the extract_shipping_address function from HEAD
+    shipping_address = extract_shipping_address(context)
+    if shipping_address:
+        country = extract_country_from_address(shipping_address)
+        if country:
+            print(f"   Detected country from address: {country}")
+            return country.lower()
+    
+    # Fallback to the incoming branch's detection logic
+    ship_to_pattern = r'ship\s+to[:\s]+(.*?)(?:\n|$)'
+    matches = re.finditer(ship_to_pattern, context_lower, re.MULTILINE | re.IGNORECASE)
+    
+    for match in matches:
+        ship_info = match.group(1).lower()
+        
+        # Check for country names
+        for country, currency in COUNTRY_CURRENCY_MAP.items():
+            if country in ship_info:
+                print(f"   Detected country: {country.upper()} -> Currency: {currency}")
+                return country
+    
+    # Also check for country field explicitly
+    country_pattern = r'country[:\s]+([\w\s]+?)(?:\n|,|$)'
+    country_matches = re.finditer(country_pattern, context_lower, re.MULTILINE | re.IGNORECASE)
+    
+    for match in country_matches:
+        country_text = match.group(1).strip().lower()
+        for country, currency in COUNTRY_CURRENCY_MAP.items():
+            if country in country_text:
+                print(f"   Detected country: {country.upper()} -> Currency: {currency}")
+                return country
+    
+    print("No country detected, defaulting to USA")
+    return "usa"
+
+def get_currency_for_country(country: str) -> str:
+    """Get currency code for a country"""
+    return COUNTRY_CURRENCY_MAP.get(country.lower(), "USD")
+
+# Node Functions
+
+def classify_query_node(state: GraphState) -> GraphState:
+    """Classify if the query is specific or general"""
+    
+    question = state["question"]
+    is_specific = detect_specific_query(question)
+    
+    query_type = "SPECIFIC" if is_specific else "GENERAL"
+    print(f"Query classified as: {query_type}")
+    
+    return {
+        "is_specific_query": is_specific
+    }
+    
+def generate_queries_node(state: GraphState) -> GraphState:
+    """Generate multiple query variations using LLM"""
+
+    question = state["question"]
+    
+    # Create prompt for query generation
+    multi_query_prompt = PromptTemplate.from_template(MULTI_QUERY_PROMPT)
+    
+    # Generate queries
+    query_chain = multi_query_prompt | llm_queries | StrOutputParser()
+    generated_text = query_chain.invoke({"question": question})
+    
+    # Parse queries (one per line)
+    queries = [q.strip() for q in generated_text.split("\n") if q.strip()]
+    
+    # Include original question
+    all_queries = [question] + queries
+    
+    print(f"Generated {len(all_queries)} queries")
+    
+    return {
+        "generated_queries": all_queries
+    }
+    
+def retrieve_documents_node(state: GraphState) -> GraphState:
+    """Retrieve documents for all generated queries using MMR"""
+    
+    queries = state["generated_queries"]
     all_docs = []
     
+    # Retrieve docs for each query
     for query in queries:
-        # Perform similarity search
-        docs = vector_store.similarity_search_with_score(
-            query=query,
-            k=MMR_FETCH_K
-        )
-        
-        # Apply MMR diversity manually
-        if len(docs) > SEARCH_K:
-            # Simple MMR implementation
-            selected_docs = []
-            docs_scores = sorted(docs, key=lambda x: x[1], reverse=True)
-            
-            for doc, score in docs_scores:
-                if len(selected_docs) >= SEARCH_K:
-                    break
-                # Check similarity with already selected docs
-                should_add = True
-                for selected_doc, _ in selected_docs:
-                    # Simple similarity check
-                    if doc.page_content[:100] == selected_doc.page_content[:100]:
-                        should_add = False
-                        break
-                
-                if should_add:
-                    selected_docs.append((doc, score))
-            
-            docs = selected_docs
-        
-        all_docs.extend([doc for doc, _ in docs[:SEARCH_K]])
+        docs = base_retriever.invoke(query)
+        all_docs.extend(docs)
     
-    # Remove duplicates
+    # Deduplicate based on content
     unique_docs = []
     seen_content = set()
+    
     for doc in all_docs:
-        content_start = doc.page_content[:200]
-        if content_start not in seen_content:
-            seen_content.add(content_start)
+        content_hash = hash(doc.page_content)
+        if content_hash not in seen_content:
+            seen_content.add(content_hash)
             unique_docs.append(doc)
     
-    return {"documents": unique_docs[:SEARCH_K]}
-
-def format_context(state: GraphState):
-    """Format retrieved documents into context and extract shipping address"""
-    formatted_context = format_docs(state["documents"])
+    print(f"Retrieved {len(unique_docs)} unique documents")
     
-    # Extract shipping address from context
+    return {
+        "documents": unique_docs
+    }
+    
+def format_context_node(state: GraphState) -> GraphState:
+    """Format retrieved documents into context string"""
+    
+    docs = state["documents"]
+    formatted = []
+    docs_info = []
+    
+    # Limit documents for context generation
+    for i, doc in enumerate(docs[:SEARCH_K], 1):
+        header = f'[Fragment {i}]'
+        if doc.metadata:
+            if 'source' in doc.metadata:
+                source = doc.metadata['source'].split("\\")[-1] if '\\' in doc.metadata['source'] else doc.metadata['source']
+                header += f' - Source: {source}'
+            if 'page_label' in doc.metadata:
+                header += f" - Page: {doc.metadata['page_label']}"
+        
+        content = doc.page_content.strip()
+        formatted.append(f'{header}\n{content}')
+    
+        # Store only top 5 most relevant docs for UI display
+        TOP_DOCS_FOR_UI = 5
+        for i, doc in enumerate(docs[:TOP_DOCS_FOR_UI], 1):
+            doc_info = {
+                "fragment": i,
+                "content": doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,
+                "source": doc.metadata.get('source', 'Not specified').split("\\")[-1] if doc.metadata.get('source') else 'Not specified',
+                "page": doc.metadata.get('page_label', 'Not specified')
+            }
+            docs_info.append(doc_info)
+    
+    formatted_context = "\n\n".join(formatted)
+    
+    # Extract shipping address using HEAD function
     shipping_address = extract_shipping_address(formatted_context)
-    
-    # Extract country from address
     destination_country = None
     dest_currency = "USD"
     
     if shipping_address and CURRENCY_ENABLED and currency_exchanger:
-        # Try to get country from address
         destination_country = extract_country_from_address(shipping_address)
-        
         if destination_country:
-            # Get currency for country
             try:
                 dest_currency = currency_exchanger.get_currency_for_country(destination_country)
             except:
-                # Fallback to address-based detection
                 dest_currency = currency_exchanger.get_currency_for_address(shipping_address)
         else:
-            # Fallback if no country detected
             dest_currency = currency_exchanger.get_currency_for_address(shipping_address)
     
+    print(f"Formatted {SEARCH_K} documents for context, showing top {TOP_DOCS_FOR_UI} in UI")
+    
     return {
-        "context": formatted_context,
+        "formatted_context": formatted_context,
+        "docs_info": docs_info,
         "shipping_address": shipping_address,
         "destination_country": destination_country,
         "dest_currency": dest_currency
     }
 
-def generate_answer(state: GraphState):
-    """Generate final answer using context with optional currency conversion"""
-    generation_llm = state['generation_llm']
-    context = state["context"]
-    question = state["question"]
-    should_convert = state.get("should_convert_currency", False)
+def detect_currency_node(state: GraphState) -> GraphState:
+    """Detect country from context and determine target currency"""
+    
+    context = state["formatted_context"]
+    
+    # Use existing shipping address if already extracted
     shipping_address = state.get("shipping_address")
-    destination_country = state.get("destination_country")
-    dest_currency = state.get("dest_currency", "USD")
+    if shipping_address and shipping_address != "Not found":
+        # Extract country from address
+        country = extract_country_from_address(shipping_address)
+        if country:
+            detected_country = country.lower()
+        else:
+            # Fallback to context detection
+            detected_country = detect_country_from_context(context)
+    else:
+        # Fallback to context detection
+        detected_country = detect_country_from_context(context)
     
-    # Create the prompt with all required variables
-    prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
+    target_currency = get_currency_for_country(detected_country)
     
-    # Prepare variables for the template
-    template_vars = {
+    print(f"Target currency set to: {target_currency}")
+    
+    return {
+        "detected_country": detected_country,
+        "target_currency": target_currency
+    }
+
+def extract_structured_data_node(state: GraphState) -> GraphState:
+    """Extract structured invoice data using Pydantic"""
+    
+    context = state["formatted_context"]
+    question = state["question"].lower()
+    
+    # Check if asking for multiple invoices
+    asking_for_multiple = any(keyword in question for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice'])
+    
+    try:
+        if asking_for_multiple:
+            print("User asking for multiple invoices - extracting from all fragments")
+            # For now, extract from the main context (which contains all fragments)
+            invoice = extract_structured_invoice(context)
+        else:
+            print("Extracting single invoice")
+            invoice = extract_structured_invoice(context)
+        
+        if invoice:
+            print(f"Invoice extracted: {invoice.invoice_id or 'Unknown ID'}")
+        else:
+            print("Could not extract structured invoice data")
+        
+        return {
+            "structured_invoice": invoice
+        }
+    except Exception as e:
+        print(f"Structured extraction error: {e}")
+        return {
+            "structured_invoice": None
+        }
+        
+def generate_response_node(state: GraphState) -> GraphState:
+    """Generate final response using structured data when available"""
+    
+    question = state["question"]
+    context = state["formatted_context"]
+    is_specific = state.get("is_specific_query", False)
+    target_currency = state.get("target_currency", "USD")
+    structured_invoice = state.get("structured_invoice")
+    shipping_address = state.get("shipping_address", "Not specified")
+    
+    # Check if we have structured data
+    print(f"DEBUG: structured_invoice = {structured_invoice is not None}")
+    print(f"DEBUG: is_specific = {is_specific}")
+    
+    # Try to use structured data first
+    if structured_invoice:
+        print("Using structured invoice data (Pydantic model)")
+        response = format_invoice_response(structured_invoice, question, is_specific)
+        
+        # Extract conversions from structured data
+        conversions = []
+        question_lower = question.lower()
+        
+        # Determine which field was asked about for specific queries
+        conv = None
+        if is_specific:
+            if "balance" in question_lower and "due" in question_lower and structured_invoice.balance_due:
+                conv = structured_invoice.balance_due
+            elif "subtotal" in question_lower and structured_invoice.subtotal:
+                conv = structured_invoice.subtotal
+            elif "discount" in question_lower and structured_invoice.discount:
+                conv = structured_invoice.discount
+            elif "shipping" in question_lower and structured_invoice.shipping:
+                conv = structured_invoice.shipping
+            elif "total" in question_lower and structured_invoice.total_amount_payable:
+                conv = structured_invoice.total_amount_payable
+        else:
+            # For general queries, show the main financial field (balance_due or total_payable)
+            conv = structured_invoice.balance_due if structured_invoice.balance_due else structured_invoice.total_amount_payable
+        
+        # Add conversion if available
+        if conv and conv.converted_amount and conv.local_currency and conv.local_currency != "USD":
+            conversions.append({
+                "original_amount": f"{conv.original_amount:.2f}",
+                "original_currency": conv.original_currency,
+                "converted_amount": f"{conv.converted_amount:.2f}",
+                "target_currency": conv.local_currency,
+                "rate": f"{conv.exchange_rate:.4f}" if conv.exchange_rate else "N/A"
+            })
+            print(f"Added conversion: {conv.original_amount} USD → {conv.converted_amount} {conv.local_currency}")
+        else:
+            print(f"No conversion needed (local_currency={conv.local_currency if conv else 'N/A'})")
+        
+        print(f"Response generated from structured data (Pydantic)")
+        print(f"Conversions to show: {len(conversions)}")
+        
+        return {
+            "response": response,
+            "currency_conversions": conversions
+        }
+    
+    # Select appropriate prompt template
+    if is_specific:
+        print("Using SPECIFIC query template")
+        selected_template = RAG_TEMPLATE_SPECIFIC
+    else:
+        print("   Using GENERAL query template")
+        selected_template = RAG_TEMPLATE_GENERAL
+    
+    # Create RAG prompt
+    rag_prompt = PromptTemplate.from_template(selected_template)
+    
+    # Generate response
+    rag_chain = rag_prompt | llm_generation | StrOutputParser()
+    response = rag_chain.invoke({
         "context": context,
         "question": question,
-        "shipping_address": shipping_address or "Not specified"
-    }
-    
-    # Generate answer
-    chain = prompt | generation_llm
-    initial_answer = chain.invoke(template_vars).content
+        "shipping_address": shipping_address
+    })
     
     # Apply currency conversion if needed
     conversions = []
-    final_answer = initial_answer
-    
-    if should_convert and CURRENCY_ENABLED and currency_exchanger:
-        if shipping_address and shipping_address != "Not specified":
-            try:
-                # Enhance answer with conversion
-                final_answer = currency_exchanger.enhance_answer_with_conversion(
-                    initial_answer, 
-                    shipping_address
+    if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
+        try:
+            # Use the enhance_answer_with_conversion function from HEAD
+            response = currency_exchanger.enhance_answer_with_conversion(
+                response, 
+                shipping_address
+            )
+            
+            # Also extract conversions for display
+            dest_currency = state.get("dest_currency", "USD")
+            if dest_currency != "USD":
+                raw_conversions = currency_exchanger.extract_and_convert_amounts(
+                    response,
+                    target_currency=dest_currency,
+                    strict_mode=True
                 )
                 
-                # Also extract conversions for display
-                conversions = currency_exchanger.extract_and_convert_amounts(
-                    initial_answer,
-                    target_currency=dest_currency
-                )
-            except Exception as e:
-                print(f"Error in currency conversion: {e}")
-                final_answer = initial_answer + f"\n\n*Note: Currency conversion failed: {str(e)}*"
+                # Deduplicate conversions
+                seen_amounts = set()
+                for conv in raw_conversions:
+                    amount_key = f"{conv['original_amount']:.2f}"
+                    if amount_key not in seen_amounts:
+                        seen_amounts.add(amount_key)
+                        conversions.append({
+                            "original_amount": f"{conv['original_amount']:.2f}",
+                            "original_currency": conv["original_currency"],
+                            "converted_amount": f"{conv['converted_amount']:.2f}",
+                            "target_currency": conv["target_currency"],
+                            "rate": f"{conv['rate']:.4f}"
+                        })
+                
+                print(f"Applied currency conversion for {shipping_address}")
+                print(f"Extracted {len(conversions)} unique monetary amounts from response")
+        except Exception as e:
+            print(f"Currency conversion error: {e}")
+            response = response + f"\n\n*Note: Currency conversion failed: {str(e)}*"
+    
+    print("Response generated (traditional RAG fallback)")
     
     return {
-        "answer": final_answer, 
-        "currency_conversions": conversions,
-        "dest_currency": dest_currency if should_convert else None,
-        "shipping_address": shipping_address,
-        "destination_country": destination_country
+        "response": response,
+        "currency_conversions": conversions
     }
-
-def build_rag_graph():
-    """Build the LangGraph workflow"""
+    
+def create_rag_graph():
+    """Create and compile the RAG graph with structured extraction"""
+    
     workflow = StateGraph(GraphState)
     
     # Add nodes
-    workflow.add_node("check_currency", check_if_currency_needed)
-    workflow.add_node("generate_queries", generate_query_variations)
-    workflow.add_node("retrieve", retrieve_documents)
-    workflow.add_node("format_context", format_context)
-    workflow.add_node("generate_answer", generate_answer)
+    workflow.add_node("classify_query", classify_query_node)
+    workflow.add_node("generate_queries", generate_queries_node)
+    workflow.add_node("retrieve_documents", retrieve_documents_node)
+    workflow.add_node("format_context", format_context_node)
+    workflow.add_node("detect_currency", detect_currency_node)
+    workflow.add_node("extract_structured_data", extract_structured_data_node)
+    workflow.add_node("generate_response", generate_response_node)
     
-    # Add edges
-    workflow.add_edge("check_currency", "generate_queries")
-    workflow.add_edge("generate_queries", "retrieve")
-    workflow.add_edge("retrieve", "format_context")
-    workflow.add_edge("format_context", "generate_answer")
-    workflow.add_edge("generate_answer", END)
+    # Define edges
+    workflow.add_edge(START, "classify_query")
+    workflow.add_edge("classify_query", "generate_queries")
+    workflow.add_edge("generate_queries", "retrieve_documents")
+    workflow.add_edge("retrieve_documents", "format_context")
+    workflow.add_edge("format_context", "detect_currency")
+    workflow.add_edge("detect_currency", "extract_structured_data")
+    workflow.add_edge("extract_structured_data", "generate_response")
+    workflow.add_edge("generate_response", END)
     
-    # Set entry point
-    workflow.set_entry_point("check_currency")
+    # Compile graph
+    app = workflow.compile()
     
-    return workflow.compile()
+    return app
 
-@st.cache_resource
-def initialize_rag_system():
-    """Initialize the complete RAG system"""
-    vector_store, query_llm, generation_llm, client, embedding = initialize_components()
+def query_rag_graph(question: str):
+    """
+    Execute RAG query using LangGraph with currency conversion
     
-    # Build the graph
-    graph = build_rag_graph()
-    
-    return graph, vector_store, query_llm, generation_llm, client
-
-def query_rag(question):
-    """Main function to query the RAG system"""
-    try:
-        # Get initialized components
-        graph, vector_store, query_llm, generation_llm, client = initialize_rag_system()
+    Args:
+        question: User's question
         
-        # Prepare initial state with ALL required components
+    Returns:
+        tuple: (response, docs_info, currency_conversions)
+    """
+    try:
+        print(f"\n{'='*60}")
+        print(f"Starting RAG Graph for question: {question[:50]}...")
+        print(f"{'='*60}\n")
+        
+        # Create graph
+        app = create_rag_graph()
+        
+        # Initial state
         initial_state = {
             "question": question,
-            "queries": [],
+            "is_specific_query": False,
+            "generated_queries": [],
             "documents": [],
-            "context": "",
-            "answer": "",
-            "query_llm": query_llm,
-            "generation_llm": generation_llm,
-            "vector_store": vector_store,
+            "formatted_context": "",
+            "detected_country": "usa",
+            "target_currency": "USD",
+            "structured_invoice": None,
             "currency_conversions": [],
+            "response": "",
+            "docs_info": [],
             "should_convert_currency": False,
             "shipping_address": None,
             "destination_country": None,
             "dest_currency": "USD"
         }
         
-        # Execute the graph
-        final_state = graph.invoke(initial_state)
+        # Execute graph
+        final_state = app.invoke(initial_state)
         
-        # Format documents for display
-        docs_info = []
-        for i, doc in enumerate(final_state["documents"][:5], 1):
-            doc_info = {
-                "fragment": i,
-                "content": doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content,
-                "source": doc.metadata.get('source', 'No specified').split("\\")[-1],
-                "page": doc.metadata.get('page_label', 'No specified')
-            }
-            docs_info.append(doc_info)
+        print(f"\n{'='*60}")
+        print("RAG Graph completed successfully")
+        print(f"{'='*60}\n")
         
-        return final_state["answer"], docs_info, final_state.get("currency_conversions", [])
+        return (
+            final_state["response"], 
+            final_state["docs_info"],
+            final_state["currency_conversions"]
+        )
         
     except Exception as e:
         error_msg = f'Could not process the query: {str(e)}'
-        import traceback
-        error_msg += f'\n\nDetailed error:\n{traceback.format_exc()}'
+        print(f"Error: {error_msg}")
         return error_msg, [], []
 
+
 def get_retriever_info():
-    """Get retriever configuration information"""
+    """Get retriever configuration info"""
     info = {
-        "tipo": f'{SEARCH_TYPE.upper()} with LangGraph',
+        "tipo": f'{SEARCH_TYPE.upper()}',
         "documentos": SEARCH_K,
         "diversidad": MMR_DIVERSITY_LAMBDA,
         "candidatos": MMR_FETCH_K,
         "umbral": None
     }
     
-    # Add currency info
+    # Add currency info from HEAD
     if CURRENCY_ENABLED:
         info["currency"] = "Enabled (Destination-based)"
         info["currency_logic"] = "Converts to shipping destination currency"
