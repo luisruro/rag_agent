@@ -79,7 +79,7 @@ def extract_structured_invoice(context: str) -> Optional[Invoice]:
         Invoice model with extracted and validated data, or None if extraction fails
     """
     try:
-        print("📊 Extracting structured data with Pydantic...")
+        print("Extracting structured data with Pydantic...")
         
         # Create prompt
         prompt = ChatPromptTemplate.from_template(EXTRACTION_PROMPT)
@@ -214,23 +214,23 @@ def extract_structured_invoice(context: str) -> Optional[Invoice]:
         # Create and validate Invoice model
         invoice = Invoice(**invoice_dict)
         
-        print(f"✅ Structured data extracted successfully")
-        print(f"   Invoice ID: {invoice.invoice_id}")
-        print(f"   Customer: {invoice.bill_to}")
-        print(f"   Country: {invoice.ship_to.country if invoice.ship_to else 'N/A'}")
-        print(f"   Local Currency: {invoice.local_currency}")
-        print(f"   Items count: {len(invoice.items) if invoice.items else 0}")
-        print(f"   Balance Due: ${invoice.balance_due.original_amount if invoice.balance_due else 'N/A'}")
-        print(f"   Total Payable: ${invoice.total_amount_payable.original_amount if invoice.total_amount_payable else 'N/A'}")
+        print(f"Structured data extracted successfully")
+        print(f"Invoice ID: {invoice.invoice_id}")
+        print(f"Customer: {invoice.bill_to}")
+        print(f"Country: {invoice.ship_to.country if invoice.ship_to else 'N/A'}")
+        print(f"Local Currency: {invoice.local_currency}")
+        print(f"Items count: {len(invoice.items) if invoice.items else 0}")
+        print(f"Balance Due: ${invoice.balance_due.original_amount if invoice.balance_due else 'N/A'}")
+        print(f"Total Payable: ${invoice.total_amount_payable.original_amount if invoice.total_amount_payable else 'N/A'}")
         
         return invoice
         
     except json.JSONDecodeError as e:
-        print(f"❌ JSON parsing error: {e}")
-        print(f"   Response was: {json_text[:200]}...")
+        print(f"JSON parsing error: {e}")
+        print(f"Response was: {json_text[:200]}...")
         return None
     except Exception as e:
-        print(f"❌ Structured extraction error: {e}")
+        print(f"Structured extraction error: {e}")
         return None
 
 
