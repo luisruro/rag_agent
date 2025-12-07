@@ -127,14 +127,27 @@ def extract_structured_invoice(context: str) -> Optional[Invoice]:
             if ship_to_data.get("country"):
                 country = ship_to_data["country"].lower()
                 country_map = {
-                    "mexico": "MXN",
-                    "méxico": "MXN",
-                    "canada": "CAD",
+                    "russia": "RUB",
+                    "dominican republic": "DOP",
+                    "pakistan": "PKR",
+                    "australia": "AUD",
+                    "germany": "EUR",
+                    "austria": "EUR",
+                    "turkey": "TRY",
+                    "liberia": "LRD",
                     "united kingdom": "GBP",
-                    "uk": "GBP",
-                    "colombia": "COP",
-                    "usa": "USD",
-                    "united states": "USD"
+                    "sweden": "SEK",
+                    "zambia": "ZMW",
+                    "mexico": "MXN",
+                    "china": "CNY",
+                    "cote d'ivoire": "XOF",
+                    "india": "INR",
+                    "new zealand": "NZD",
+                    "bangladesh": "BDT",
+                    "spain": "EUR",
+                    "france": "EUR",
+                    "brazil": "BRL",
+                    "guatemala": "GTQ"
                 }
                 invoice_dict["local_currency"] = country_map.get(country, "USD")
         
