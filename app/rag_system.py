@@ -16,6 +16,22 @@ from currency_exchange import currency_exchanger
 from invoice_model import Invoice
 from structured_extraction import extract_structured_invoice, format_invoice_response
 
+# Import the financial agent
+try:
+    from financial_agent import financial_agent
+    FINANCIAL_AGENT_AVAILABLE = True
+    print(" Financial Analysis Agent loaded successfully")
+except ImportError as e:
+    print(f" Financial Analysis Agent not found: {e}")
+    FINANCIAL_AGENT_AVAILABLE = False
+    # Create a dummy agent
+    class DummyFinancialAgent:
+        def detect_analysis_query(self, question):
+            return False
+        def analyze(self, question, context):
+            return "Financial analysis not available", {}
+    financial_agent = DummyFinancialAgent()
+
 load_dotenv()
 
 CURRENCY_ENABLED = False
@@ -64,6 +80,7 @@ except Exception as e:
             return answer
     currency_exchanger = DummyCurrencyExchanger()
 
+# Helper functions for currency conversion
 def extract_all_usd_amounts(text: str) -> List[Dict]:
     """Extract ALL USD amounts from text with their positions"""
     patterns = [
@@ -82,7 +99,6 @@ def extract_all_usd_amounts(text: str) -> List[Dict]:
         pattern_matches = re.finditer(pattern, text, re.IGNORECASE)
         for match in pattern_matches:
             if amount_group == 0:
-                
                 amount_text = match.group(0)
             else:
                 amount_text = match.group(amount_group)
@@ -123,32 +139,11 @@ def convert_usd_to_currency(amount: float, dest_currency: str) -> Optional[float
         pass
     
     fallback_rates = {
-        "EUR": 0.95,
-        "GBP": 0.80,
-        "MXN": 20,
-        "JPY": 150,
-        "CNY": 7.2,
-        "RUB": 90,
-        "BRL": 5,
-        "CAD": 1.35,
-        "AUD": 1.50,
-        "INR": 83,
-        "KRW": 1300,
-        "CHF": 0.90,
-        "SEK": 10.5,
-        "NOK": 10.5,
-        "DKK": 7.0,
-        "PLN": 4.0,
-        "TRY": 32,
-        "ZAR": 18,
-        "SGD": 1.35,
-        "HKD": 7.8,
-        "TWD": 32,
-        "THB": 36,
-        "IDR": 15600,
-        "PHP": 56,
-        "MYR": 4.7,
-        "VND": 24800,
+        "EUR": 0.95, "GBP": 0.80, "MXN": 20, "JPY": 150, "CNY": 7.2,
+        "RUB": 90, "BRL": 5, "CAD": 1.35, "AUD": 1.50, "INR": 83,
+        "KRW": 1300, "CHF": 0.90, "SEK": 10.5, "NOK": 10.5, "DKK": 7.0,
+        "PLN": 4.0, "TRY": 32, "ZAR": 18, "SGD": 1.35, "HKD": 7.8,
+        "TWD": 32, "THB": 36, "IDR": 15600, "PHP": 56, "MYR": 4.7,
     }
     
     rate = fallback_rates.get(dest_currency, 1.0)
@@ -174,9 +169,7 @@ def force_currency_conversion_in_text(text: str, dest_currency: str, shipping_ad
         converted_amount = convert_usd_to_currency(amount, dest_currency)
         
         if converted_amount and converted_amount != amount:
-            
-            if dest_currency in ["JPY", "KRW", "IDR", "VND", "INR"]:
-                
+            if dest_currency in ["JPY", "KRW", "IDR", "INR"]:
                 converted_str = f"{converted_amount:,.0f}"
             else:
                 converted_str = f"{converted_amount:,.2f}"
@@ -199,7 +192,6 @@ def force_currency_conversion_in_text(text: str, dest_currency: str, shipping_ad
 
 def should_apply_currency_conversion(question: str, response: str) -> bool:
     """Check if currency conversion should be applied"""
-    # Check if response contains monetary amounts
     monetary_patterns = [
         r'\$\s*[\d,]+\.?\d*',
         r'[\d,]+\.?\d*\s*USD',
@@ -209,7 +201,6 @@ def should_apply_currency_conversion(question: str, response: str) -> bool:
     
     has_monetary = any(re.search(pattern, response, re.IGNORECASE) for pattern in monetary_patterns)
     
-    # Check if question asks for monetary values
     monetary_keywords = [
         'total', 'due', 'amount', 'balance', 'cost', 'price', 
         'discount', 'shipping', 'subtotal', 'money', 'currency',
@@ -219,13 +210,12 @@ def should_apply_currency_conversion(question: str, response: str) -> bool:
     
     return has_monetary or question_asks_money
 
-# ===== END OF NEW HELPER FUNCTIONS =====
-
 # State definition
 class GraphState(TypedDict):
     """State of the graph"""
     question: str
     is_specific_query: bool
+    is_financial_analysis_query: bool  # NEW FIELD
     generated_queries: List[str]
     documents: List
     formatted_context: str
@@ -235,12 +225,15 @@ class GraphState(TypedDict):
     currency_conversions: List[Dict]
     response: str
     docs_info: List[dict]
-    # Adding currency-specific fields from HEAD
+    # Adding currency-specific fields
     should_convert_currency: bool
     shipping_address: str
     destination_country: str
     dest_currency: str
-    
+    # Financial analysis fields
+    financial_analysis: Optional[str]  # NEW
+    financial_data_summary: Optional[Dict]  # NEW
+
 client = weaviate.connect_to_local(
     host=WEAVIATE_HOST,
     port=WEAVIATE_PORT
@@ -272,40 +265,16 @@ base_retriever = vector_store.as_retriever(
 )
 
 COUNTRY_CURRENCY_MAP = {
-    "russia": "RUB",
-    "dominican republic": "DOP",
-    "pakistan": "PKR",
-    "australia": "AUD",
-    "germany": "EUR",
-    "austria": "EUR",
-    "turkey": "TRY",
-    "liberia": "LRD",
-    "sweden": "SEK",
-    "zambia": "ZMW",
-    "china": "CNY",
-    "cote d'ivoire": "XOF",
-    "india": "INR",
-    "new zealand": "NZD",
-    "bangladesh": "BDT",
-    "spain": "EUR",
-    "france": "EUR",
-    "brazil": "BRL",
-    "guatemala": "GTQ",
-    "mexico": "MXN",
-    "méxico": "MXN",
-    "canada": "CAD",
-    "united kingdom": "GBP",
-    "uk": "GBP",
-    "germany": "EUR",
-    "france": "EUR",
-    "spain": "EUR",
-    "italy": "EUR",
-    "colombia": "COP",
-    "argentina": "ARS",
-    "chile": "CLP",
-    "peru": "PEN",
-    "brazil": "BRL",
-    "usa": "USD",
+    "russia": "RUB", "dominican republic": "DOP", "pakistan": "PKR",
+    "australia": "AUD", "germany": "EUR", "austria": "EUR",
+    "turkey": "TRY", "liberia": "LRD", "sweden": "SEK",
+    "zambia": "ZMW", "china": "CNY", "cote d'ivoire": "XOF",
+    "india": "INR", "new zealand": "NZD", "bangladesh": "BDT",
+    "spain": "EUR", "france": "EUR", "brazil": "BRL",
+    "guatemala": "GTQ", "mexico": "MXN", "méxico": "MXN",
+    "canada": "CAD", "united kingdom": "GBP", "uk": "GBP",
+    "italy": "EUR", "colombia": "COP", "argentina": "ARS",
+    "chile": "CLP", "peru": "PEN", "usa": "USD",
     "united states": "USD",
 }
 
@@ -353,26 +322,19 @@ def extract_country_from_address(address):
         (r'\b(?:Brazil|BR|BRA|Brasil)\b', 'Brazil'),
         (r'\b(?:Australia|AU|AUS)\b', 'Australia'),
         (r'\b(?:India|IN|IND)\b', 'India'),
-        (r'\b(?:South Korea|Korea|KR|KOR|한국|대한민국)\b', 'South Korea'),
-        (r'\bMEX\b', 'Mexico'),
-        (r'\bGBR\b', 'United Kingdom'),
-        (r'\bFRA\b', 'France'),
-        (r'\bDEU\b', 'Germany'),
-        (r'\bESP\b', 'Spain'),
-        (r'\bITA\b', 'Italy'),
-        (r'\bRUS\b', 'Russia'),
-        (r'\bJPN\b', 'Japan'),
-        (r'\bCHN\b', 'China'),
-        (r'\bBRA\b', 'Brazil'),
-        (r'\bAUS\b', 'Australia'),
-        (r'\bIND\b', 'India'),
-        (r'\bKOR\b', 'South Korea'),
+        (r'\bMEX\b', 'Mexico'), (r'\bGBR\b', 'United Kingdom'),
+        (r'\bFRA\b', 'France'), (r'\bDEU\b', 'Germany'),
+        (r'\bESP\b', 'Spain'), (r'\bITA\b', 'Italy'),
+        (r'\bRUS\b', 'Russia'), (r'\bJPN\b', 'Japan'),
+        (r'\bCHN\b', 'China'), (r'\bBRA\b', 'Brazil'),
+        (r'\bAUS\b', 'Australia'), (r'\bIND\b', 'India'),
     ]
     
     for pattern, country in country_patterns:
         if re.search(pattern, address, re.IGNORECASE):
             return country
     
+    # City-based detection
     if re.search(r'\b(?:Paris|Lyon|Marseille|Nice|Toulouse)\b', address, re.IGNORECASE):
         return 'France'
     elif re.search(r'\b(?:Berlin|Munich|Hamburg|Frankfurt|Cologne)\b', address, re.IGNORECASE):
@@ -381,7 +343,7 @@ def extract_country_from_address(address):
         return 'Spain'
     elif re.search(r'\b(?:Rome|Milan|Naples|Turin|Florence)\b', address, re.IGNORECASE):
         return 'Italy'
-    elif re.search(r'\b(?:Moscow|St\. Petersburg|Saint Petersburg|Novosibirsk|Yekaterinburg)\b', address, re.IGNORECASE):
+    elif re.search(r'\b(?:Moscow|St\. Petersburg|Saint Petersburg)\b', address, re.IGNORECASE):
         return 'Russia'
     elif re.search(r'\b(?:Tokyo|Osaka|Kyoto|Yokohama|Nagoya)\b', address, re.IGNORECASE):
         return 'Japan'
@@ -394,17 +356,13 @@ def detect_specific_query(question: str) -> bool:
     """Detect if the user is asking for a specific piece of information"""
     question_lower = question.lower()
     
-    question_lower = question_lower.replace('ant ', 'and ')
-    question_lower = question_lower.replace('inovice', 'invoice')
+    question_lower = question_lower.replace('ant ', 'and ').replace('inovice', 'invoice')
     
     if any(keyword in question_lower for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice']):
         return False
     
     specific_fields = ['product', 'quantity', 'amount', 'total', 'price', 'cost', 'balance', 'date', 'number', 'invoice', 'due']
-    field_count = 0
-    for field in specific_fields:
-        if field in question_lower:
-            field_count += 1
+    field_count = sum(1 for field in specific_fields if field in question_lower)
     
     if 1 <= field_count <= 4:
         return True
@@ -414,14 +372,9 @@ def detect_specific_query(question: str) -> bool:
         r'\bshow\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
         r'\btell\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
         r'\bwhat\s+(?:is|are)\s+(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
-        r'\bjust\b.*\bthe\b',
-        r'\bonly\b.*\bthe\b',
-        r'\bhow\s+much\b',
-        r'\bproduct.*quantity.*total\b',
-        r'\bget the.*product.*quantity.*total\b',
-        r'\btotal\s+due\b',
-        r'\bwhat.*total.*due\b',
-        r'\bshow.*total.*due\b',
+        r'\bjust\b.*\bthe\b', r'\bonly\b.*\bthe\b', r'\bhow\s+much\b',
+        r'\bproduct.*quantity.*total\b', r'\bget the.*product.*quantity.*total\b',
+        r'\btotal\s+due\b', r'\bwhat.*total.*due\b', r'\bshow.*total.*due\b',
     ]
     
     for pattern in specific_patterns:
@@ -466,27 +419,114 @@ def get_currency_for_country(country: str) -> str:
     return COUNTRY_CURRENCY_MAP.get(country.lower(), "USD")
 
 # Node Functions
-
 def classify_query_node(state: GraphState) -> GraphState:
-    """Classify if the query is specific or general"""
+    """Classify if the query is specific, general, or financial analysis"""
     
     question = state["question"]
     is_specific = detect_specific_query(question)
     
-    query_type = "SPECIFIC" if is_specific else "GENERAL"
+    # Enhanced financial analysis detection with business/product recommendation keywords
+    question_lower = question.lower()
+    
+    # Explicit financial analysis triggers - EXPANDED to include business/product recommendations
+    explicit_analysis_triggers = [
+        'analyze the', 'analysis of', 'trends in', 'patterns in',
+        'provide insights', 'give me insights', 'summary of',
+        'compare', 'comparison', 'statistics', 'metrics',
+        'breakdown of', 'distribution of', 'what trends',
+        'financial analysis', 'business analysis', 'deep dive',
+        'detailed analysis', 'comprehensive analysis',
+        'insights about', 'analyze spending', 'analyze patterns',
+        'analyze trends', 'provide a summary', 'create a summary',
+        'give me a breakdown', 'provide a breakdown',
+        # ADDED: Business/product recommendation keywords
+        'what products should', 'which products should',
+        'recommend products', 'suggest products',
+        'product expansion', 'expand product',
+        'business should expand', 'should the business',
+        'growth opportunities', 'opportunities for',
+        'improve business', 'increase sales',
+        'best selling', 'top products',
+        'product recommendations', 'business recommendations',
+        'as a financial agent', 'financial suggestions',
+        'what would you recommend', 'what do you suggest',
+        'business advice', 'financial advice',
+        'strategic advice', 'make recommendations',
+        'provide recommendations', 'offer suggestions',
+        'how can we improve', 'how to increase',
+    ]
+    
+    # Check for explicit analysis triggers
+    has_explicit_analysis = any(trigger in question_lower for trigger in explicit_analysis_triggers)
+    
+    # Check for question patterns that indicate business/financial advice
+    advice_patterns = [
+        r'what\s+(?:should|would|could|might)\s+.*\s+business',
+        r'how\s+(?:can|could|should|would)\s+.*\s+improve',
+        r'suggestions?\s+(?:for|to)\s+.*\s+business',
+        r'recommendations?\s+(?:for|to)\s+.*\s+business',
+        r'advice\s+(?:for|on)\s+.*\s+business',
+        r'as\s+a\s+financial\s+agent',
+        r'business\s+recommendations?',
+        r'growth\s+strateg',
+        r'improvement\s+suggestions?',
+        r'what\s+.*\s+expand',
+        r'which\s+.*\s+expand',
+    ]
+    
+    has_advice_pattern = any(re.search(pattern, question_lower, re.IGNORECASE) 
+                            for pattern in advice_patterns)
+    
+    # BUT check for simple queries that should NOT trigger analysis
+    # These are simple queries that might accidentally contain analysis words
+    simple_query_patterns = [
+        r'get\s+.*\s+analysis',  # "get analysis of invoice" is simple
+        r'what\s+is\s+.*\s+analysis',  # "what is analysis of invoice" is simple
+        r'analyze\s+invoice\s+#\d+',  # "analyze invoice #123" is simple
+        r'analysis\s+of\s+invoice\s+#\d+',  # "analysis of invoice #123" is simple
+        r'get\s+.*\s+trends',  # "get trends" is usually simple
+        r'find\s+.*\s+patterns',  # "find patterns" is usually simple
+    ]
+    
+    is_simple_disguised = False
+    for pattern in simple_query_patterns:
+        if re.search(pattern, question_lower, re.IGNORECASE):
+            is_simple_disguised = True
+            break
+    
+    # Determine if it's financial analysis
+    # Now includes business/product recommendation queries
+    is_financial_analysis = (has_explicit_analysis or has_advice_pattern) and not is_simple_disguised
+    
+    # OVERRIDE: If it's a specific query, it's NOT financial analysis
+    # Specific queries like "get product, quantity" should NEVER trigger analysis
+    if is_specific:
+        is_financial_analysis = False
+    
+    # Also check if question asks for simple information
+    simple_info_keywords = ['get', 'what is', 'show me', 'tell me', 'find', 'search']
+    
+    # If it's a simple info request AND doesn't have explicit analysis keywords, it's not analysis
+    if (any(keyword in question_lower for keyword in simple_info_keywords) and 
+        not has_explicit_analysis and not has_advice_pattern):
+        is_financial_analysis = False
+    
+    query_type = "FINANCIAL_ANALYSIS" if is_financial_analysis else ("SPECIFIC" if is_specific else "GENERAL")
     print(f"Query classified as: {query_type}")
+    print(f"  has_explicit_analysis: {has_explicit_analysis}")
+    print(f"  has_advice_pattern: {has_advice_pattern}")
+    print(f"  is_simple_disguised: {is_simple_disguised}")
     
     return {
-        "is_specific_query": is_specific
+        "is_specific_query": is_specific,
+        "is_financial_analysis_query": is_financial_analysis
     }
     
 def generate_queries_node(state: GraphState) -> GraphState:
     """Generate multiple query variations using LLM"""
-
     question = state["question"]
     
     multi_query_prompt = PromptTemplate.from_template(MULTI_QUERY_PROMPT)
-    
     query_chain = multi_query_prompt | llm_queries | StrOutputParser()
     generated_text = query_chain.invoke({"question": question})
     
@@ -494,14 +534,10 @@ def generate_queries_node(state: GraphState) -> GraphState:
     all_queries = [question] + queries
     
     print(f"Generated {len(all_queries)} queries")
-    
-    return {
-        "generated_queries": all_queries
-    }
+    return {"generated_queries": all_queries}
     
 def retrieve_documents_node(state: GraphState) -> GraphState:
     """Retrieve documents for all generated queries using MMR"""
-    
     queries = state["generated_queries"]
     all_docs = []
     
@@ -519,14 +555,10 @@ def retrieve_documents_node(state: GraphState) -> GraphState:
             unique_docs.append(doc)
     
     print(f"Retrieved {len(unique_docs)} unique documents")
-    
-    return {
-        "documents": unique_docs
-    }
+    return {"documents": unique_docs}
     
 def format_context_node(state: GraphState) -> GraphState:
     """Format retrieved documents into context string"""
-    
     docs = state["documents"]
     formatted = []
     docs_info = []
@@ -584,7 +616,6 @@ def format_context_node(state: GraphState) -> GraphState:
 
 def detect_currency_node(state: GraphState) -> GraphState:
     """Detect country from context and determine target currency"""
-    
     context = state["formatted_context"]
     
     shipping_address = state.get("shipping_address")
@@ -600,7 +631,6 @@ def detect_currency_node(state: GraphState) -> GraphState:
     target_currency = get_currency_for_country(detected_country)
     
     print(f"Target currency set to: {target_currency}")
-    
     return {
         "detected_country": detected_country,
         "target_currency": target_currency
@@ -608,7 +638,6 @@ def detect_currency_node(state: GraphState) -> GraphState:
 
 def extract_structured_data_node(state: GraphState) -> GraphState:
     """Extract structured invoice data using Pydantic"""
-    
     context = state["formatted_context"]
     question = state["question"].lower()
     
@@ -627,30 +656,102 @@ def extract_structured_data_node(state: GraphState) -> GraphState:
         else:
             print("Could not extract structured invoice data")
         
-        return {
-            "structured_invoice": invoice
-        }
+        return {"structured_invoice": invoice}
     except Exception as e:
         print(f"Structured extraction error: {e}")
+        return {"structured_invoice": None}
+
+def financial_analysis_node(state: GraphState) -> GraphState:
+    """Financial analysis agent node"""
+    if not FINANCIAL_AGENT_AVAILABLE:
         return {
-            "structured_invoice": None
+            "financial_analysis": "Financial analysis agent not available",
+            "financial_data_summary": {}
         }
-        
+    
+    question = state["question"]
+    context = state["formatted_context"]
+    shipping_address = state.get("shipping_address", "Not specified")
+    
+    print(f"Financial Analysis Agent activated for: {question[:50]}...")
+    
+    # Use the financial agent to analyze
+    analysis_response, financial_data_summary = financial_agent.analyze(question, context)
+    
+    # Apply currency conversion if available
+    if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
+        try:
+            analysis_response = currency_exchanger.enhance_answer_with_conversion(
+                analysis_response, shipping_address
+            )
+        except Exception as e:
+            print(f"Currency conversion error in financial agent: {e}")
+    
+    return {
+        "financial_analysis": analysis_response,
+        "financial_data_summary": financial_data_summary
+    }
+
 def generate_response_node(state: GraphState) -> GraphState:
-    """Generate final response using structured data when available"""
+    """Generate final response - now integrates financial analysis if available"""
     
     question = state["question"]
     context = state["formatted_context"]
     is_specific = state.get("is_specific_query", False)
+    is_financial_analysis = state.get("is_financial_analysis_query", False)
     target_currency = state.get("target_currency", "USD")
     structured_invoice = state.get("structured_invoice")
     shipping_address = state.get("shipping_address", "Not specified")
     dest_currency = state.get("dest_currency", "USD")
+    financial_analysis = state.get("financial_analysis")
+    financial_data_summary = state.get("financial_data_summary", {})
     
-    print(f"DEBUG PATH CHECK: is_specific={is_specific}, structured_invoice={structured_invoice is not None}")
-    print(f"DEBUG: Shipping address='{shipping_address}'")
-    print(f"DEBUG: Destination currency='{dest_currency}'")
+    print(f"DEBUG PATH CHECK: is_specific={is_specific}, is_financial_analysis={is_financial_analysis}")
     
+    # ===== FOR FINANCIAL ANALYSIS QUERIES =====
+    if is_financial_analysis:
+        print("FINANCIAL ANALYSIS PATH - using analysis agent output")
+        
+        if financial_analysis and financial_analysis != "Financial analysis agent not available":
+            # Use the financial analysis
+            response = f"## 📊 Financial Analysis Results\n\n{financial_analysis}"
+            
+            # Add summary data at the end
+            if financial_data_summary:
+                response += f"\n\n### 📈 Analysis Summary"
+                if financial_data_summary.get('total_invoices'):
+                    response += f"\n- **Invoices Analyzed:** {financial_data_summary.get('total_invoices')}"
+                if financial_data_summary.get('total_amount_usd'):
+                    response += f"\n- **Total Amount:** ${financial_data_summary.get('total_amount_usd'):,.2f} USD"
+                if financial_data_summary.get('average_amount_usd'):
+                    response += f"\n- **Average Invoice:** ${financial_data_summary.get('average_amount_usd'):,.2f} USD"
+                if financial_data_summary.get('customer_count'):
+                    response += f"\n- **Unique Customers:** {financial_data_summary.get('customer_count')}"
+            
+        else:
+            # Fallback to traditional RAG
+            print("No financial analysis available, falling back to RAG_TEMPLATE_GENERAL")
+            selected_template = RAG_TEMPLATE_GENERAL
+            rag_prompt = PromptTemplate.from_template(selected_template)
+            rag_chain = rag_prompt | llm_generation | StrOutputParser()
+            response = rag_chain.invoke({
+                "context": context,
+                "question": question,
+                "shipping_address": shipping_address
+            })
+        
+        # Apply currency conversion if relevant
+        conversions = []
+        if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
+            try:
+                response = currency_exchanger.enhance_answer_with_conversion(response, shipping_address)
+            except Exception as e:
+                print(f"Currency conversion error in analysis response: {e}")
+        
+        print("Response generated (FINANCIAL ANALYSIS ONLY path)")
+        return {"response": response, "currency_conversions": conversions}
+    
+    # ===== FOR SPECIFIC QUERIES =====
     if is_specific:
         print("FORCING SPECIFIC QUERY PATH - using specific template only")
         
@@ -708,7 +809,7 @@ def generate_response_node(state: GraphState) -> GraphState:
                 )
                 conversions.extend(new_conversions)
             
-          
+            # Extract conversions for display
             if CURRENCY_ENABLED and currency_exchanger and dest_currency != "USD":
                 try:
                     raw_conversions = currency_exchanger.extract_and_convert_amounts(
@@ -735,7 +836,7 @@ def generate_response_node(state: GraphState) -> GraphState:
         elif should_convert and not can_convert:
             print("DEBUG: Should convert but can't (no shipping address or USD destination)")
             if not shipping_address or shipping_address == "Not specified":
-                response = response + "\n\n**"
+                response = response + "\n\n*Note: Showing conversion*"
             elif dest_currency == "USD":
                 response = response + "\n\n*Note: Destination currency is USD - no conversion needed*"
         
@@ -746,7 +847,8 @@ def generate_response_node(state: GraphState) -> GraphState:
             "response": response,
             "currency_conversions": conversions
         }
-  
+    
+    # ===== FOR GENERAL QUERIES =====
     print("GENERAL QUERY - using structured data if available")
     
     if structured_invoice:
@@ -794,14 +896,11 @@ def generate_response_node(state: GraphState) -> GraphState:
             "currency_conversions": conversions
         }
     
-    # Fallback: Use general template if no structured data
+    # Fallback: Use general template
     print("No structured data - using GENERAL template")
     selected_template = RAG_TEMPLATE_GENERAL
     
-    # Create RAG prompt
     rag_prompt = PromptTemplate.from_template(selected_template)
-    
-    # Generate response
     rag_chain = rag_prompt | llm_generation | StrOutputParser()
     response = rag_chain.invoke({
         "context": context,
@@ -857,9 +956,9 @@ def generate_response_node(state: GraphState) -> GraphState:
         "response": response,
         "currency_conversions": conversions
     }
-    
+
 def create_rag_graph():
-    """Create and compile the RAG graph with structured extraction"""
+    """Create and compile the RAG graph with structured extraction AND financial analysis"""
     
     workflow = StateGraph(GraphState)
     
@@ -870,6 +969,7 @@ def create_rag_graph():
     workflow.add_node("format_context", format_context_node)
     workflow.add_node("detect_currency", detect_currency_node)
     workflow.add_node("extract_structured_data", extract_structured_data_node)
+    workflow.add_node("financial_analysis", financial_analysis_node)  # NEW NODE
     workflow.add_node("generate_response", generate_response_node)
     
     # Define edges
@@ -879,27 +979,39 @@ def create_rag_graph():
     workflow.add_edge("retrieve_documents", "format_context")
     workflow.add_edge("format_context", "detect_currency")
     workflow.add_edge("detect_currency", "extract_structured_data")
-    workflow.add_edge("extract_structured_data", "generate_response")
+    
+    # After extract_structured_data, route based on query type
+    workflow.add_conditional_edges(
+        "extract_structured_data",
+        lambda state: "financial_analysis" if state.get("is_financial_analysis_query", False) else "generate_response",
+        {
+            "financial_analysis": "financial_analysis",
+            "generate_response": "generate_response"
+        }
+    )
+    
+    # Financial analysis feeds into generate_response
+    workflow.add_edge("financial_analysis", "generate_response")
     workflow.add_edge("generate_response", END)
     
     # Compile graph
     app = workflow.compile()
-    
     return app
 
 def query_rag_graph(question: str):
     """
-    Execute RAG query using LangGraph with currency conversion
-
+    Execute RAG query using LangGraph with currency conversion AND financial analysis
+    
     Args:
         question: User's question
         
     Returns:
-        tuple: (response, docs_info, currency_conversions)
+        tuple: (response, docs_info, currency_conversions, financial_analysis)
     """
     try:
         print(f"\n{'='*60}")
-        print(f"Starting RAG Graph for question: {question[:50]}...")
+        print(f"Starting Enhanced RAG Graph for question: {question[:50]}...")
+        print(f"Agents: RAG + Financial Analysis + Currency Conversion")
         print(f"{'='*60}\n")
         
         # Create graph
@@ -909,6 +1021,7 @@ def query_rag_graph(question: str):
         initial_state = {
             "question": question,
             "is_specific_query": False,
+            "is_financial_analysis_query": False,
             "generated_queries": [],
             "documents": [],
             "formatted_context": "",
@@ -921,27 +1034,31 @@ def query_rag_graph(question: str):
             "should_convert_currency": False,
             "shipping_address": None,
             "destination_country": None,
-            "dest_currency": "USD"
+            "dest_currency": "USD",
+            "financial_analysis": None,
+            "financial_data_summary": None
         }
         
         # Execute graph
         final_state = app.invoke(initial_state)
         
         print(f"\n{'='*60}")
-        print("RAG Graph completed successfully")
+        print("Enhanced RAG Graph completed successfully")
+        query_type = "Financial Analysis" if final_state.get("is_financial_analysis_query") else ("Specific" if final_state.get("is_specific_query") else "General")
+        print(f"Query type: {query_type}")
         print(f"{'='*60}\n")
         
         return (
             final_state["response"], 
             final_state["docs_info"],
-            final_state["currency_conversions"]
+            final_state["currency_conversions"],
+            final_state.get("financial_analysis")
         )
         
     except Exception as e:
         error_msg = f'Could not process the query: {str(e)}'
         print(f"Error: {error_msg}")
-        return error_msg, [], []
-
+        return error_msg, [], [], None
 
 def get_retriever_info():
     """Get retriever configuration info"""
@@ -960,7 +1077,138 @@ def get_retriever_info():
             info["currency_api"] = "ExchangeRate-API"
         else:
             info["currency_api"] = "Free APIs (Frankfurter/ECB)"
-    else:
-        info["currency"] = "Disabled"
+    
+    # Add info about agents
+    info["agents"] = {
+        "rag_agent": "Information Retrieval & Extraction",
+        "financial_analysis_agent": "Trend Analysis & Insights" if FINANCIAL_AGENT_AVAILABLE else "Not available",
+        "currency_agent": "Automatic Currency Conversion"
+    }
     
     return info
+
+def test_query_classification():
+    """Test function to verify query classification works correctly"""
+    
+    test_cases = [
+        # Financial Analysis queries
+        ("Analyze the spending patterns for all customers", True),
+        ("Provide a summary of all invoices from 2012", True),
+        ("What trends do you see in shipping costs?", True),
+        ("Compare invoice amounts between different countries", True),
+        ("Give me insights into customer purchasing behavior", True),
+        ("Analyze the financial data for European customers", True),
+        ("Provide a breakdown of sales by product category", True),
+        ("What are the statistics for Q4 2012?", True),
+        
+        # Business/Product Recommendation queries (NEW - should be financial analysis)
+        ("what products should the business expand", True),
+        ("what suggestions would you make as a financial agent", True),
+        ("which products should we focus on", True),
+        ("recommend products for business growth", True),
+        ("what business advice can you give", True),
+        ("how can we improve sales", True),
+        ("what growth opportunities do you see", True),
+        ("as a financial agent, what would you suggest", True),
+        
+        # Specific queries (should NOT be financial analysis)
+        ("Get the total due for invoice #20149", False),
+        ("Get product, quantity and balance due for Natalie Webber", False),
+        ("What is the shipping address for invoice #20418?", False),
+        ("Convert the total amount to local currency", False),
+        ("Find all invoices for Patrick O'Brill", False),
+        ("Show me the discount amount for invoice #20149", False),
+        ("Get all details for invoice #20149", False),
+        ("What is the total due for invoice #12345?", False),
+        
+        # Edge cases
+        ("Analyze invoice #20149", False), 
+        ("Get analysis of invoice #20149", False), 
+        ("What is analysis of spending?", True),
+        ("Find trends in invoice #20149", False),  
+    ]
+    
+    print("Testing Query Classification Logic")
+    print("=" * 60)
+    
+    for query, expected_financial_analysis in test_cases:
+        is_specific = detect_specific_query(query)
+        question_lower = query.lower()
+       
+        explicit_analysis_triggers = [
+            'analyze the', 'analysis of', 'trends in', 'patterns in',
+            'provide insights', 'give me insights', 'summary of',
+            'compare', 'comparison', 'statistics', 'metrics',
+            'breakdown of', 'distribution of', 'what trends',
+            'financial analysis', 'business analysis', 'deep dive',
+            'detailed analysis', 'comprehensive analysis',
+            'insights about', 'analyze spending', 'analyze patterns',
+            'analyze trends', 'provide a summary', 'create a summary',
+            'give me a breakdown', 'provide a breakdown',
+            'what products should', 'which products should',
+            'recommend products', 'suggest products',
+            'product expansion', 'expand product',
+            'business should expand', 'should the business',
+            'growth opportunities', 'opportunities for',
+            'improve business', 'increase sales',
+            'best selling', 'top products',
+            'product recommendations', 'business recommendations',
+            'as a financial agent', 'financial suggestions',
+            'what would you recommend', 'what do you suggest',
+            'business advice', 'financial advice',
+            'strategic advice', 'make recommendations',
+            'provide recommendations', 'offer suggestions',
+            'how can we improve', 'how to increase',
+        ]
+        
+        has_explicit_analysis = any(trigger in question_lower for trigger in explicit_analysis_triggers)
+        
+        advice_patterns = [
+            r'what\s+(?:should|would|could|might)\s+.*\s+business',
+            r'how\s+(?:can|could|should|would)\s+.*\s+improve',
+            r'suggestions?\s+(?:for|to)\s+.*\s+business',
+            r'recommendations?\s+(?:for|to)\s+.*\s+business',
+            r'advice\s+(?:for|on)\s+.*\s+business',
+            r'as\s+a\s+financial\s+agent',
+            r'business\s+recommendations?',
+            r'growth\s+strateg',
+            r'improvement\s+suggestions?',
+            r'what\s+.*\s+expand',
+            r'which\s+.*\s+expand',
+        ]
+        
+        has_advice_pattern = any(re.search(pattern, question_lower, re.IGNORECASE) 
+                                for pattern in advice_patterns)
+        
+        simple_query_patterns = [
+            r'get\s+.*\s+analysis',
+            r'what\s+is\s+.*\s+analysis',
+            r'analyze\s+invoice\s+#\d+',
+            r'analysis\s+of\s+invoice\s+#\d+',
+            r'get\s+.*\s+trends',
+            r'find\s+.*\s+patterns',
+        ]
+        
+        is_simple_disguised = False
+        for pattern in simple_query_patterns:
+            if re.search(pattern, question_lower, re.IGNORECASE):
+                is_simple_disguised = True
+                break
+        
+        is_financial_analysis = (has_explicit_analysis or has_advice_pattern) and not is_simple_disguised
+        
+        if is_specific:
+            is_financial_analysis = False
+        
+        simple_info_keywords = ['get', 'what is', 'show me', 'tell me', 'find', 'search']
+        if (any(keyword in question_lower for keyword in simple_info_keywords) and 
+            not has_explicit_analysis and not has_advice_pattern):
+            is_financial_analysis = False
+        
+        status = "true" if is_financial_analysis == expected_financial_analysis else "false"
+        print(f"{status} Query: '{query[:50]}...'")
+        print(f"  Expected FA: {expected_financial_analysis}, Got: {is_financial_analysis}")
+        print(f"  Is specific: {is_specific}")
+        print(f"  Has explicit analysis: {has_explicit_analysis}")
+        print(f"  Has advice pattern: {has_advice_pattern}")
+        print()
