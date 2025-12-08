@@ -18,22 +18,21 @@ from structured_extraction import extract_structured_invoice, format_invoice_res
 
 load_dotenv()
 
-# Try to import currency_exchange with error handling - KEEPING FROM HEAD
 CURRENCY_ENABLED = False
 currency_exchanger = None
 
 try:
     from currency_exchange import currency_exchanger
-    # Test if API key is available
+    
     if os.getenv("EXCHANGERATE_API_KEY"):
         CURRENCY_ENABLED = True
         print(" Currency exchange enabled with API key")
     else:
         print(" EXCHANGERATE_API_KEY not found. Currency conversion will use free APIs.")
-        CURRENCY_ENABLED = True  # Still enabled but will use free APIs
+        CURRENCY_ENABLED = True  
 except ImportError as e:
     print(f" Currency exchange module not found: {e}")
-    # Create a dummy currency exchanger
+    
     class DummyCurrencyExchanger:
         def extract_and_convert_amounts(self, text, target_currency="USD"):
             return []
@@ -65,7 +64,164 @@ except Exception as e:
             return answer
     currency_exchanger = DummyCurrencyExchanger()
 
-# State definition - KEEPING MODERN VERSION FROM INCOMING BRANCH BUT ADDING CURRENCY FIELDS
+def extract_all_usd_amounts(text: str) -> List[Dict]:
+    """Extract ALL USD amounts from text with their positions"""
+    patterns = [
+        # Pattern 1: $1,234.56
+        (r'(\$\s*[\d,]+\.?\d*)', 0),
+        # Pattern 2: 1,234.56 USD
+        (r'([\d,]+\.?\d*\s*USD)', 1),
+        # Pattern 3: USD 1,234.56
+        (r'(USD\s*[\d,]+\.?\d*)', 0),
+        # Pattern 4: total: $1,234.56
+        (r'(total|amount|balance|due|cost|price|discount|shipping|subtotal)[\s:]*\$?\s*([\d,]+\.?\d*)', 2),
+    ]
+    
+    matches = []
+    for pattern, amount_group in patterns:
+        pattern_matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in pattern_matches:
+            if amount_group == 0:
+                
+                amount_text = match.group(0)
+            else:
+                amount_text = match.group(amount_group)
+            
+            amount_match = re.search(r'[\d,]+\.?\d*', amount_text)
+            if not amount_match:
+                continue
+            
+            try:
+                amount_str = amount_match.group().replace(',', '')
+                amount = float(amount_str)
+                if amount <= 0.01:  
+                    continue
+                    
+                matches.append({
+                    "full_match": match.group(0),
+                    "amount_text": amount_text,
+                    "amount": amount,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "pattern": pattern
+                })
+            except ValueError:
+                continue
+    
+    matches.sort(key=lambda x: x["start"], reverse=True)
+    return matches
+
+def convert_usd_to_currency(amount: float, dest_currency: str) -> Optional[float]:
+    """Convert USD amount to destination currency"""
+    if dest_currency == "USD":
+        return amount
+    
+    try:
+        if CURRENCY_ENABLED and currency_exchanger:
+            return currency_exchanger.convert_amount(amount, "USD", dest_currency)
+    except:
+        pass
+    
+    fallback_rates = {
+        "EUR": 0.95,
+        "GBP": 0.80,
+        "MXN": 20,
+        "JPY": 150,
+        "CNY": 7.2,
+        "RUB": 90,
+        "BRL": 5,
+        "CAD": 1.35,
+        "AUD": 1.50,
+        "INR": 83,
+        "KRW": 1300,
+        "CHF": 0.90,
+        "SEK": 10.5,
+        "NOK": 10.5,
+        "DKK": 7.0,
+        "PLN": 4.0,
+        "TRY": 32,
+        "ZAR": 18,
+        "SGD": 1.35,
+        "HKD": 7.8,
+        "TWD": 32,
+        "THB": 36,
+        "IDR": 15600,
+        "PHP": 56,
+        "MYR": 4.7,
+        "VND": 24800,
+    }
+    
+    rate = fallback_rates.get(dest_currency, 1.0)
+    return round(amount * rate, 2)
+
+def force_currency_conversion_in_text(text: str, dest_currency: str, shipping_address: str = None) -> str:
+    """
+    Force currency conversion on ALL USD amounts in text
+    Returns: (converted_text, conversions_list)
+    """
+    if dest_currency == "USD" or not text:
+        return text, []
+    
+    matches = extract_all_usd_amounts(text)
+    if not matches:
+        return text, []
+    
+    result = text
+    conversions = []
+    
+    for match in matches:
+        amount = match["amount"]
+        converted_amount = convert_usd_to_currency(amount, dest_currency)
+        
+        if converted_amount and converted_amount != amount:
+            
+            if dest_currency in ["JPY", "KRW", "IDR", "VND", "INR"]:
+                
+                converted_str = f"{converted_amount:,.0f}"
+            else:
+                converted_str = f"{converted_amount:,.2f}"
+            
+            replacement = f"{match['full_match']} (approx. {converted_str} {dest_currency})"
+            result = result[:match["start"]] + replacement + result[match["end"]:]
+            
+            conversions.append({
+                "original_amount": f"{amount:.2f}",
+                "original_currency": "USD",
+                "converted_amount": f"{converted_amount:.2f}",
+                "target_currency": dest_currency,
+                "original_text": match['full_match']
+            })
+    
+    if conversions and shipping_address:
+        result += f"\n\n*Note: Converted from USD to {dest_currency} based on shipping to {shipping_address}*"
+    
+    return result, conversions
+
+def should_apply_currency_conversion(question: str, response: str) -> bool:
+    """Check if currency conversion should be applied"""
+    # Check if response contains monetary amounts
+    monetary_patterns = [
+        r'\$\s*[\d,]+\.?\d*',
+        r'[\d,]+\.?\d*\s*USD',
+        r'USD\s*[\d,]+\.?\d*',
+        r'(?:total|amount|balance|due|cost|price|discount|shipping|subtotal)[\s:]*\$?\s*[\d,]+\.?\d*',
+    ]
+    
+    has_monetary = any(re.search(pattern, response, re.IGNORECASE) for pattern in monetary_patterns)
+    
+    # Check if question asks for monetary values
+    monetary_keywords = [
+        'total', 'due', 'amount', 'balance', 'cost', 'price', 
+        'discount', 'shipping', 'subtotal', 'money', 'currency',
+        'dollar', 'euro', 'peso', 'pound', 'yen', 'convert'
+    ]
+    question_asks_money = any(keyword in question.lower() for keyword in monetary_keywords)
+    
+    return has_monetary or question_asks_money
+
+# ===== END OF NEW HELPER FUNCTIONS =====
+
+# State definition
 class GraphState(TypedDict):
     """State of the graph"""
     question: str
@@ -153,11 +309,8 @@ COUNTRY_CURRENCY_MAP = {
     "united states": "USD",
 }
 
-# ===== FUNCTIONS FROM HEAD VERSION (CURRENCY LOGIC) =====
-
 def extract_shipping_address(context):
-    """Extract shipping address from context - FROM HEAD"""
-    # Look for shipping address patterns
+    """Extract shipping address from context"""
     patterns = [
         r'Ship To:\s*(.+?)(?:\n|$)',
         r'Shipping Address:\s*(.+?)(?:\n|$)',
@@ -172,24 +325,20 @@ def extract_shipping_address(context):
     for pattern in patterns:
         match = re.search(pattern, context, re.IGNORECASE | re.DOTALL)
         if match:
-            # Clean up the address - take first 200 chars max
             address = match.group(1).strip()
-            # Remove any additional labels that might be captured
             address = re.sub(r'^\s*(?:Name|Contact|Phone|Email|Date|Invoice).*?:.*?$', '', address, flags=re.MULTILINE | re.IGNORECASE)
-            address = ' '.join(address.split('\n')[:3]).strip()  # Take first 3 lines
+            address = ' '.join(address.split('\n')[:3]).strip()
             if address:
                 return address
     
     return None
 
 def extract_country_from_address(address):
-    """Extract country from shipping address - FROM HEAD"""
+    """Extract country from shipping address"""
     if not address:
         return None
     
-    # Country detection patterns
     country_patterns = [
-        # Common country names
         (r'\b(?:United States|USA|U\.S\.A\.|US)\b', 'United States'),
         (r'\b(?:Mexico|México|Mex)\b', 'Mexico'),
         (r'\b(?:Canada|CAN|Ca)\b', 'Canada'),
@@ -205,8 +354,6 @@ def extract_country_from_address(address):
         (r'\b(?:Australia|AU|AUS)\b', 'Australia'),
         (r'\b(?:India|IN|IND)\b', 'India'),
         (r'\b(?:South Korea|Korea|KR|KOR|한국|대한민국)\b', 'South Korea'),
-        
-        # Country codes (ISO 3166-1 alpha-3)
         (r'\bMEX\b', 'Mexico'),
         (r'\bGBR\b', 'United Kingdom'),
         (r'\bFRA\b', 'France'),
@@ -222,13 +369,10 @@ def extract_country_from_address(address):
         (r'\bKOR\b', 'South Korea'),
     ]
     
-    # First try to find country in address
     for pattern, country in country_patterns:
         if re.search(pattern, address, re.IGNORECASE):
             return country
     
-    # If no country found, try to extract from common patterns
-    # Look for city, state/province patterns that might indicate country
     if re.search(r'\b(?:Paris|Lyon|Marseille|Nice|Toulouse)\b', address, re.IGNORECASE):
         return 'France'
     elif re.search(r'\b(?:Berlin|Munich|Hamburg|Frankfurt|Cologne)\b', address, re.IGNORECASE):
@@ -246,85 +390,50 @@ def extract_country_from_address(address):
     
     return None
 
-def check_if_currency_needed(state: GraphState):
-    """Check if currency conversion is needed for this query - FROM HEAD"""
-    question = state["question"].lower()
-    
-    # Keywords that indicate currency/billing questions
-    currency_keywords = [
-        'bill', 'invoice', 'factura', 'payment', 'pago', 
-        'cost', 'costo', 'price', 'precio', 'amount', 'cantidad',
-        'total', 'balance', 'saldo', 'money', 'dinero',
-        'dollar', 'dólar', 'euro', 'peso', 'currency', 'moneda',
-        'convert', 'conversión', 'exchange', 'cambio',
-        'usd', 'eur', 'mxn', 'gbp', 'jpy', 'rub'
-    ]
-    
-    should_convert = any(keyword in question for keyword in currency_keywords)
-    
-    return {"should_convert_currency": should_convert and CURRENCY_ENABLED}
-
-# ===== FUNCTIONS FROM INCOMING BRANCH (WITH MODIFICATIONS) =====
-
 def detect_specific_query(question: str) -> bool:
-    """
-    Detect if the user is asking for a specific piece of information
-    vs. a general overview
-    """
+    """Detect if the user is asking for a specific piece of information"""
     question_lower = question.lower()
     
-    # Clean up common typos
     question_lower = question_lower.replace('ant ', 'and ')
     question_lower = question_lower.replace('inovice', 'invoice')
     
-    print(f"DEBUG detect_specific_query: '{question_lower}'")
-    
-    # If asking for "all" or multiple invoices, it's NOT specific
     if any(keyword in question_lower for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice']):
-        print("DEBUG: NOT specific - asking for multiple invoices")
         return False
     
-    # Check if asking for specific fields - EXPANDED TO INCLUDE "due"
     specific_fields = ['product', 'quantity', 'amount', 'total', 'price', 'cost', 'balance', 'date', 'number', 'invoice', 'due']
     field_count = 0
     for field in specific_fields:
         if field in question_lower:
             field_count += 1
-            print(f"DEBUG: Found specific field '{field}'")
     
-    # If asking for 1-4 specific fields, it's specific
     if 1 <= field_count <= 4:
-        print(f"DEBUG: Detected {field_count} specific field(s) in query -> SPECIFIC")
         return True
     
     specific_patterns = [
-        r'\bget\s+(?:the|me)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "get the total due"
-        r'\bshow\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "show me the total due"
-        r'\btell\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "tell me the amount"
-        r'\bwhat\s+(?:is|are)\s+(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',  # "what is the total due"
-        r'\bjust\b.*\bthe\b',           # "just the balance"
-        r'\bonly\b.*\bthe\b',           # "only the amount"
-        r'\bhow\s+much\b',              # "how much is"
-        r'\bproduct.*quantity.*total\b', # "product, quantity, and total"
-        r'\bget the.*product.*quantity.*total\b',  # "get the product, quantity, and total"
-        r'\btotal\s+due\b',             # "total due"
-        r'\bwhat.*total.*due\b',        # "what is the total due"
-        r'\bshow.*total.*due\b',        # "show me the total due"
+        r'\bget\s+(?:the|me)?\s*(?:product|quantity|amount|total|due|balance)\b',
+        r'\bshow\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
+        r'\btell\s+(?:me)?\s*(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
+        r'\bwhat\s+(?:is|are)\s+(?:the)?\s*(?:product|quantity|amount|total|due|balance)\b',
+        r'\bjust\b.*\bthe\b',
+        r'\bonly\b.*\bthe\b',
+        r'\bhow\s+much\b',
+        r'\bproduct.*quantity.*total\b',
+        r'\bget the.*product.*quantity.*total\b',
+        r'\btotal\s+due\b',
+        r'\bwhat.*total.*due\b',
+        r'\bshow.*total.*due\b',
     ]
     
     for pattern in specific_patterns:
         if re.search(pattern, question_lower):
-            print(f"DEBUG: Matched specific pattern '{pattern}' -> SPECIFIC")
             return True
     
-    print("DEBUG: No specific patterns matched -> GENERAL")
     return False
 
 def detect_country_from_context(context: str) -> str:
     """Detect country from ship_to address in context"""
     context_lower = context.lower()
     
-    # First try the extract_shipping_address function from HEAD
     shipping_address = extract_shipping_address(context)
     if shipping_address:
         country = extract_country_from_address(shipping_address)
@@ -332,20 +441,15 @@ def detect_country_from_context(context: str) -> str:
             print(f"   Detected country from address: {country}")
             return country.lower()
     
-    # Fallback to the incoming branch's detection logic
     ship_to_pattern = r'ship\s+to[:\s]+(.*?)(?:\n|$)'
     matches = re.finditer(ship_to_pattern, context_lower, re.MULTILINE | re.IGNORECASE)
     
     for match in matches:
         ship_info = match.group(1).lower()
-        
-        # Check for country names
         for country, currency in COUNTRY_CURRENCY_MAP.items():
             if country in ship_info:
-                print(f"   Detected country: {country.upper()} -> Currency: {currency}")
                 return country
     
-    # Also check for country field explicitly
     country_pattern = r'country[:\s]+([\w\s]+?)(?:\n|,|$)'
     country_matches = re.finditer(country_pattern, context_lower, re.MULTILINE | re.IGNORECASE)
     
@@ -353,10 +457,8 @@ def detect_country_from_context(context: str) -> str:
         country_text = match.group(1).strip().lower()
         for country, currency in COUNTRY_CURRENCY_MAP.items():
             if country in country_text:
-                print(f"   Detected country: {country.upper()} -> Currency: {currency}")
                 return country
     
-    print("No country detected, defaulting to USA")
     return "usa"
 
 def get_currency_for_country(country: str) -> str:
@@ -383,17 +485,12 @@ def generate_queries_node(state: GraphState) -> GraphState:
 
     question = state["question"]
     
-    # Create prompt for query generation
     multi_query_prompt = PromptTemplate.from_template(MULTI_QUERY_PROMPT)
     
-    # Generate queries
     query_chain = multi_query_prompt | llm_queries | StrOutputParser()
     generated_text = query_chain.invoke({"question": question})
     
-    # Parse queries (one per line)
     queries = [q.strip() for q in generated_text.split("\n") if q.strip()]
-    
-    # Include original question
     all_queries = [question] + queries
     
     print(f"Generated {len(all_queries)} queries")
@@ -408,12 +505,10 @@ def retrieve_documents_node(state: GraphState) -> GraphState:
     queries = state["generated_queries"]
     all_docs = []
     
-    # Retrieve docs for each query
     for query in queries:
         docs = base_retriever.invoke(query)
         all_docs.extend(docs)
     
-    # Deduplicate based on content
     unique_docs = []
     seen_content = set()
     
@@ -436,7 +531,6 @@ def format_context_node(state: GraphState) -> GraphState:
     formatted = []
     docs_info = []
     
-    # Limit documents for context generation
     for i, doc in enumerate(docs[:SEARCH_K], 1):
         header = f'[Fragment {i}]'
         if doc.metadata:
@@ -449,7 +543,6 @@ def format_context_node(state: GraphState) -> GraphState:
         content = doc.page_content.strip()
         formatted.append(f'{header}\n{content}')
     
-    # Store only top 5 most relevant docs for UI display
     TOP_DOCS_FOR_UI = 5
     for i, doc in enumerate(docs[:TOP_DOCS_FOR_UI], 1):
         doc_info = {
@@ -462,7 +555,6 @@ def format_context_node(state: GraphState) -> GraphState:
     
     formatted_context = "\n\n".join(formatted)
     
-    # Extract shipping address using HEAD function
     shipping_address = extract_shipping_address(formatted_context)
     print(f"DEBUG: Extracted shipping address: '{shipping_address}'")
     
@@ -495,18 +587,14 @@ def detect_currency_node(state: GraphState) -> GraphState:
     
     context = state["formatted_context"]
     
-    # Use existing shipping address if already extracted
     shipping_address = state.get("shipping_address")
     if shipping_address and shipping_address != "Not found":
-        # Extract country from address
         country = extract_country_from_address(shipping_address)
         if country:
             detected_country = country.lower()
         else:
-            # Fallback to context detection
             detected_country = detect_country_from_context(context)
     else:
-        # Fallback to context detection
         detected_country = detect_country_from_context(context)
     
     target_currency = get_currency_for_country(detected_country)
@@ -524,13 +612,11 @@ def extract_structured_data_node(state: GraphState) -> GraphState:
     context = state["formatted_context"]
     question = state["question"].lower()
     
-    # Check if asking for multiple invoices
     asking_for_multiple = any(keyword in question for keyword in ['all invoices', 'all invoice', 'multiple invoice', 'list of invoice', 'every invoice'])
     
     try:
         if asking_for_multiple:
             print("User asking for multiple invoices - extracting from all fragments")
-            # For now, extract from the main context (which contains all fragments)
             invoice = extract_structured_invoice(context)
         else:
             print("Extracting single invoice")
@@ -559,22 +645,19 @@ def generate_response_node(state: GraphState) -> GraphState:
     target_currency = state.get("target_currency", "USD")
     structured_invoice = state.get("structured_invoice")
     shipping_address = state.get("shipping_address", "Not specified")
+    dest_currency = state.get("dest_currency", "USD")
     
     print(f"DEBUG PATH CHECK: is_specific={is_specific}, structured_invoice={structured_invoice is not None}")
     print(f"DEBUG: Shipping address='{shipping_address}'")
+    print(f"DEBUG: Destination currency='{dest_currency}'")
     
-    # ===== FOR SPECIFIC QUERIES =====
-    # FORCE specific queries to use the specific template, NOT structured data
     if is_specific:
         print("FORCING SPECIFIC QUERY PATH - using specific template only")
         
-        # Use the specific template
         selected_template = RAG_TEMPLATE_SPECIFIC
         
-        # Create RAG prompt
         rag_prompt = PromptTemplate.from_template(selected_template)
         
-        # Generate response
         rag_chain = rag_prompt | llm_generation | StrOutputParser()
         response = rag_chain.invoke({
             "context": context,
@@ -582,44 +665,58 @@ def generate_response_node(state: GraphState) -> GraphState:
             "shipping_address": shipping_address
         })
         
-        # Clean up the response - remove any "Answer:" or "Answer to the Question:" prefixes
         response = re.sub(r'^(Answer\s*(?:to\s+the\s+Question)?:\s*)?', '', response, flags=re.IGNORECASE)
         response = response.strip()
         
-        print(f"DEBUG Specific response (cleaned): {response[:200]}...")
+        print(f"DEBUG Specific response (before conversion): {response[:200]}...")
         
-        # Apply currency conversion if needed - ALWAYS TRY FOR SPECIFIC QUERIES WITH MONETARY AMOUNTS
         conversions = []
         
-        # Check if response contains monetary amounts
-        has_monetary = bool(re.search(r'\$\d+[\d,]*\.?\d*', response))
-        print(f"DEBUG: Response has monetary amounts: {has_monetary}")
+        should_convert = should_apply_currency_conversion(question, response)
+        can_convert = (shipping_address and shipping_address != "Not specified" and dest_currency != "USD")
         
-        if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
-            try:
-                print(f"DEBUG: Attempting currency conversion for: {shipping_address}")
-                enhanced_response = currency_exchanger.enhance_answer_with_conversion(
-                    response, 
-                    shipping_address
+        print(f"DEBUG: Should convert? {should_convert}, Can convert? {can_convert}")
+        
+        if should_convert and can_convert:
+            print(f"DEBUG: Applying FORCED currency conversion to {dest_currency}")
+            
+            if CURRENCY_ENABLED and currency_exchanger:
+                try:
+                    enhanced_response = currency_exchanger.enhance_answer_with_conversion(
+                        response, 
+                        shipping_address
+                    )
+                    
+                    if enhanced_response != response:
+                        response = enhanced_response
+                        print("DEBUG: Currency conversion applied via currency_exchanger")
+                    else:
+                        print("DEBUG: currency_exchanger didn't work, using forced conversion")
+                        response, new_conversions = force_currency_conversion_in_text(
+                            response, dest_currency, shipping_address
+                        )
+                        conversions.extend(new_conversions)
+                except Exception as e:
+                    print(f"DEBUG: currency_exchanger failed, using forced conversion: {e}")
+                    response, new_conversions = force_currency_conversion_in_text(
+                        response, dest_currency, shipping_address
+                    )
+                    conversions.extend(new_conversions)
+            else:
+                response, new_conversions = force_currency_conversion_in_text(
+                    response, dest_currency, shipping_address
                 )
-                
-                # Check if conversion actually happened
-                if enhanced_response != response:
-                    response = enhanced_response
-                    print("DEBUG: Currency conversion applied successfully")
-                else:
-                    print("DEBUG: Currency conversion didn't change response")
-                
-                # Extract conversions for display
-                dest_currency = state.get("dest_currency", "USD")
-                if dest_currency != "USD":
+                conversions.extend(new_conversions)
+            
+          
+            if CURRENCY_ENABLED and currency_exchanger and dest_currency != "USD":
+                try:
                     raw_conversions = currency_exchanger.extract_and_convert_amounts(
                         response,
                         target_currency=dest_currency,
-                        strict_mode=True
+                        strict_mode=False  
                     )
                     
-                    # Deduplicate conversions
                     seen_amounts = set()
                     for conv in raw_conversions:
                         amount_key = f"{conv['original_amount']:.2f}"
@@ -632,54 +729,54 @@ def generate_response_node(state: GraphState) -> GraphState:
                                 "target_currency": conv["target_currency"],
                                 "rate": f"{conv['rate']:.4f}"
                             })
-                    
-                    print(f"DEBUG: Extracted {len(conversions)} conversions for display")
-            except Exception as e:
-                print(f"Currency conversion error: {e}")
-                # Add error note to response if conversion failed
-                if has_monetary:
-                    response = response + f"\n\n*Note: Could not convert currency: {str(e)}*"
-        elif has_monetary and (not shipping_address or shipping_address == "Not specified"):
-            print("DEBUG: Has monetary amounts but no shipping address found")
-            response = response + "\n\n*Note: Shipping address not found - showing original currency only*"
+                except Exception as e:
+                    print(f"DEBUG: Error extracting conversions: {e}")
         
-        print("Response generated (SPECIFIC template path)")
+        elif should_convert and not can_convert:
+            print("DEBUG: Should convert but can't (no shipping address or USD destination)")
+            if not shipping_address or shipping_address == "Not specified":
+                response = response + "\n\n**"
+            elif dest_currency == "USD":
+                response = response + "\n\n*Note: Destination currency is USD - no conversion needed*"
+        
+        print(f"DEBUG Specific response (after conversion): {response[:200]}...")
+        print(f"Response generated (SPECIFIC template path) with {len(conversions)} conversions")
         
         return {
             "response": response,
             "currency_conversions": conversions
         }
-    
-    # ===== FOR GENERAL QUERIES =====
-    # Only use structured data for general queries
+  
     print("GENERAL QUERY - using structured data if available")
     
-    # Try to use structured data first
     if structured_invoice:
         print("Using structured invoice data (Pydantic model)")
         response = format_invoice_response(structured_invoice, question, is_specific)
         
-        # Apply currency conversion to structured response if shipping address exists
-        if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
-            try:
-                print(f"DEBUG: Applying currency conversion to structured response")
-                enhanced_response = currency_exchanger.enhance_answer_with_conversion(
-                    response, 
-                    shipping_address
-                )
-                if enhanced_response != response:
-                    response = enhanced_response
-                    print("DEBUG: Currency conversion applied to structured response")
-            except Exception as e:
-                print(f"Currency conversion error for structured response: {e}")
+        should_convert = should_apply_currency_conversion(question, response)
+        can_convert = (shipping_address and shipping_address != "Not specified" and dest_currency != "USD")
         
-        # Extract conversions from structured data
+        if should_convert and can_convert:
+            print(f"DEBUG: Applying currency conversion to structured response ({dest_currency})")
+            
+            if CURRENCY_ENABLED and currency_exchanger:
+                try:
+                    enhanced_response = currency_exchanger.enhance_answer_with_conversion(
+                        response, 
+                        shipping_address
+                    )
+                    if enhanced_response != response:
+                        response = enhanced_response
+                except Exception as e:
+                    print(f"DEBUG: currency_exchanger failed for structured response: {e}")
+                    # Try forced conversion
+                    response, _ = force_currency_conversion_in_text(response, dest_currency, shipping_address)
+            else:
+                response, _ = force_currency_conversion_in_text(response, dest_currency, shipping_address)
+        
         conversions = []
-        
-        # For general queries, show the main financial field
         conv = structured_invoice.balance_due if structured_invoice.balance_due else structured_invoice.total_amount_payable
         
-        # Add conversion if available
         if conv and conv.converted_amount and conv.local_currency and conv.local_currency != "USD":
             conversions.append({
                 "original_amount": f"{conv.original_amount:.2f}",
@@ -688,9 +785,6 @@ def generate_response_node(state: GraphState) -> GraphState:
                 "target_currency": conv.local_currency,
                 "rate": f"{conv.exchange_rate:.4f}" if conv.exchange_rate else "N/A"
             })
-            print(f"Added conversion: {conv.original_amount} USD → {conv.converted_amount} {conv.local_currency}")
-        else:
-            print(f"No conversion needed (local_currency={conv.local_currency if conv else 'N/A'})")
         
         print(f"Response generated from structured data (Pydantic)")
         print(f"Conversions to show: {len(conversions)}")
@@ -715,42 +809,47 @@ def generate_response_node(state: GraphState) -> GraphState:
         "shipping_address": shipping_address
     })
     
-    # Apply currency conversion if needed
     conversions = []
-    if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
-        try:
-            response = currency_exchanger.enhance_answer_with_conversion(
-                response, 
-                shipping_address
-            )
-            
-            # Also extract conversions for display
-            dest_currency = state.get("dest_currency", "USD")
-            if dest_currency != "USD":
-                raw_conversions = currency_exchanger.extract_and_convert_amounts(
-                    response,
-                    target_currency=dest_currency,
-                    strict_mode=True
+    should_convert = should_apply_currency_conversion(question, response)
+    can_convert = (shipping_address and shipping_address != "Not specified" and dest_currency != "USD")
+    
+    if should_convert and can_convert:
+        print(f"DEBUG: Applying currency conversion to general response ({dest_currency})")
+        
+        if CURRENCY_ENABLED and currency_exchanger:
+            try:
+                response = currency_exchanger.enhance_answer_with_conversion(
+                    response, 
+                    shipping_address
                 )
                 
-                # Deduplicate conversions
-                seen_amounts = set()
-                for conv in raw_conversions:
-                    amount_key = f"{conv['original_amount']:.2f}"
-                    if amount_key not in seen_amounts:
-                        seen_amounts.add(amount_key)
-                        conversions.append({
-                            "original_amount": f"{conv['original_amount']:.2f}",
-                            "original_currency": conv["original_currency"],
-                            "converted_amount": f"{conv['converted_amount']:.2f}",
-                            "target_currency": conv["target_currency"],
-                            "rate": f"{conv['rate']:.4f}"
-                        })
+                if dest_currency != "USD":
+                    raw_conversions = currency_exchanger.extract_and_convert_amounts(
+                        response,
+                        target_currency=dest_currency,
+                        strict_mode=False
+                    )
+                    
+                    seen_amounts = set()
+                    for conv in raw_conversions:
+                        amount_key = f"{conv['original_amount']:.2f}"
+                        if amount_key not in seen_amounts:
+                            seen_amounts.add(amount_key)
+                            conversions.append({
+                                "original_amount": f"{conv['original_amount']:.2f}",
+                                "original_currency": conv["original_currency"],
+                                "converted_amount": f"{conv['converted_amount']:.2f}",
+                                "target_currency": conv["target_currency"],
+                                "rate": f"{conv['rate']:.4f}"
+                            })
                 
                 print(f"Applied currency conversion for {shipping_address}")
-        except Exception as e:
-            print(f"Currency conversion error: {e}")
-            response = response + f"\n\n*Note: Currency conversion failed: {str(e)}*"
+            except Exception as e:
+                print(f"Currency conversion error: {e}")
+                response = response + f"\n\n*Note: Currency conversion failed: {str(e)}*"
+        else:
+            response, new_conversions = force_currency_conversion_in_text(response, dest_currency, shipping_address)
+            conversions.extend(new_conversions)
     
     print("Response generated (traditional RAG fallback)")
     
@@ -791,7 +890,7 @@ def create_rag_graph():
 def query_rag_graph(question: str):
     """
     Execute RAG query using LangGraph with currency conversion
-    
+
     Args:
         question: User's question
         

@@ -68,6 +68,7 @@ ANSWER:
 
 # In app/prompts.py, update the RAG_TEMPLATE_SPECIFIC:
 
+# In prompts.py, make this change to RAG_TEMPLATE_SPECIFIC:
 RAG_TEMPLATE_SPECIFIC = """
 You are extracting specific information from financial documents.
 
@@ -84,16 +85,24 @@ CRITICAL INSTRUCTIONS:
 3. Do NOT include explanations, context, or additional details
 4. If asking for multiple things (like "product and quantity"), list them on separate lines
 5. Format: just the value or "Label: value" if needed for clarity
-6. When given monetary amounts, always include currency conversion to the destination country's currency based on the shipping address
+6. **MANDATORY CURRENCY CONVERSION:** For ALL monetary amounts, ALWAYS show both USD and destination currency
 
-CURRENCY CONVERSION RULES:
-1. If the question asks about ANY monetary amount (total, due, amount, price, cost, balance, etc.):
-   - Show the original amount as it appears in the document
-   - ALWAYS add the converted amount in destination currency
-   - Format: "[amount] [currency] (approx. [converted] [dest_currency])"
-2. Example for China: "$1,173.56 USD (approx. 8,600 CNY)"
-3. Example for Russia: "$605.11 USD (approx. 55,000 RUB)"
-4. If shipping address is provided, use the destination country's currency and end with a currency conversion summary.
+CURRENCY CONVERSION RULES (MUST FOLLOW):
+1. If the question asks about ANY monetary amount (total, due, amount, price, cost, balance, discount, shipping, subtotal, etc.):
+   - Show the original amount exactly as it appears in the document (usually USD)
+   - **ALWAYS** add the converted amount in destination currency based on shipping address
+   - Format: "$[amount] USD (approx. [converted] [dest_currency])"
+2. Destination currency is based on shipping address:
+   - France, Germany, Spain, Italy → EUR
+   - United Kingdom → GBP
+   - Mexico → MXN
+   - Japan → JPY
+   - China → CNY
+   - Russia → RUB
+   - Brazil → BRL
+   - etc.
+3. Use approximate conversions if exact rate not available
+4. **Never** show amounts without conversion when shipping address is known
 
 EXAMPLES:
 Question: "What's the product and quantity?"
@@ -103,7 +112,10 @@ Question: "Get the total amount"
 Answer: "$1,173.56 USD (approx. 8,600 CNY)"
 
 Question: "What is the total due?"
-Answer: "$6,358.34 USD (approx. 46,700 CNY)"
+Answer: "$6,358.34 USD (approx. 6,020 EUR)"
+
+Question: "Get the discount for invoice #20149"
+Answer: "$685.24 USD (approx. 650 EUR)"
 
 ANSWER (just the requested information, no extra text):
 """
@@ -168,7 +180,6 @@ Original query: {question}
 Generate exactly 3 alternative versions of this query, one per line, without numbering or bullet points:
 """
 
-# Currency-specific prompts - KEEPING THESE FROM HEAD
 CURRENCY_CONVERSION_PROMPT = """
 You are a currency conversion specialist. Your task is to enhance a financial answer with currency conversion.
 
