@@ -84,6 +84,7 @@ CRITICAL INSTRUCTIONS:
 3. Do NOT include explanations, context, or additional details
 4. If asking for multiple things (like "product and quantity"), list them on separate lines
 5. Format: just the value or "Label: value" if needed for clarity
+6. When given monetary amounts, always include currency conversion to the destination country's currency based on the shipping address
 
 CURRENCY CONVERSION RULES:
 1. If the question asks about ANY monetary amount (total, due, amount, price, cost, balance, etc.):
@@ -92,7 +93,7 @@ CURRENCY CONVERSION RULES:
    - Format: "[amount] [currency] (approx. [converted] [dest_currency])"
 2. Example for China: "$1,173.56 USD (approx. 8,600 CNY)"
 3. Example for Russia: "$605.11 USD (approx. 55,000 RUB)"
-4. If shipping address is provided, use the destination country's currency
+4. If shipping address is provided, use the destination country's currency and end with a currency conversion summary.
 
 EXAMPLES:
 Question: "What's the product and quantity?"
@@ -146,7 +147,7 @@ INSTRUCTIONS:
 2. Include the shipping destination in your answer.
 3. Format monetary amounts as: "[amount] [currency]"
 4. Organize information clearly.
-5. Do not perform any currency conversions.
+5. Perform currency conversions according to the shipping destination.
 
 ANSWER:"""
 
