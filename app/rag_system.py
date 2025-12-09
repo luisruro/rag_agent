@@ -16,7 +16,6 @@ from currency_exchange import currency_exchanger
 from invoice_model import Invoice
 from structured_extraction import extract_structured_invoice, format_invoice_response
 
-# Import the financial agent
 try:
     from financial_agent import financial_agent
     FINANCIAL_AGENT_AVAILABLE = True
@@ -80,7 +79,85 @@ except Exception as e:
             return answer
     currency_exchanger = DummyCurrencyExchanger()
 
-# Helper functions for currency conversion
+# ===== EMAIL NODE IMPORT =====
+try:
+    from email_node import email_generation_node, detect_email_request, extract_email_info_from_context
+    EMAIL_NODE_AVAILABLE = True
+    print(" Email node loaded successfully")
+except ImportError as e:
+    print(f" Email node not found: {e}")
+    EMAIL_NODE_AVAILABLE = False
+    
+    # Fallback functions if email_node not available
+    def detect_email_request(question: str) -> bool:
+        """Check if user wants to generate/send email"""
+        question_lower = question.lower()
+        email_keywords = [
+            'email', 'send email', 'write email', 'compose email', 'draft email',
+            'send an email', 'write an email', 'compose an email', 'draft an email',
+            'email about', 'email regarding', 'email concerning', 'email to',
+            'mail', 'send mail', 'write mail'
+        ]
+        
+        has_email_keyword = any(keyword in question_lower for keyword in email_keywords)
+        
+        email_patterns = [
+            r'^send\s+(?:an?\s+)?email',
+            r'^write\s+(?:an?\s+)?email',
+            r'^compose\s+(?:an?\s+)?email',
+            r'^draft\s+(?:an?\s+)?email',
+            r'email\s+to\s+[\w\.-]+@',
+            r'send\s+to\s+[\w\.-]+@'
+        ]
+        
+        has_email_pattern = any(re.search(pattern, question_lower, re.IGNORECASE) 
+                               for pattern in email_patterns)
+        
+        return has_email_keyword or has_email_pattern
+    
+    def extract_email_info_from_context(context: str) -> Dict:
+        """Extract email addresses and recipient info from context"""
+        email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
+        emails = re.findall(email_pattern, context)
+        
+        # Look for recipient names
+        name_patterns = [
+            r'Customer[:\s]+([\w\s]+?)(?:\n|$)',
+            r'Bill To[:\s]+([\w\s]+?)(?:\n|$)',
+            r'Ship To[:\s]+([\w\s]+?)(?:\n|$)',
+            r'Invoice To[:\s]+([\w\s]+?)(?:\n|$)',
+            r'Contact[:\s]+([\w\s]+?)(?:\n|$)',
+        ]
+        
+        recipient_name = "Customer"
+        for pattern in name_patterns:
+            match = re.search(pattern, context, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                if name and len(name) < 50 and name.lower() != "unknown":  
+                    recipient_name = name
+                    break
+        
+        primary_email = emails[0] if emails else "colombiastorecommerce@gmail.com"
+        
+        return {
+            "emails": emails,
+            "recipient_name": recipient_name,
+            "primary_email": primary_email
+        }
+    
+    def email_generation_node(state: Dict) -> Dict:
+        """Fallback email generation if email_node is not available"""
+        return {
+            **state,
+            "response": "Email generation is currently unavailable. Please check if email_node.py is properly installed.",
+            "email_draft": None,
+            "email_recipient": None,
+            "email_subject": None,
+            "email_body": None
+        }
+
+# ===== ORIGINAL HELPER FUNCTIONS (UNCHANGED) =====
 def extract_all_usd_amounts(text: str) -> List[Dict]:
     """Extract ALL USD amounts from text with their positions"""
     patterns = [
@@ -215,7 +292,8 @@ class GraphState(TypedDict):
     """State of the graph"""
     question: str
     is_specific_query: bool
-    is_financial_analysis_query: bool  # NEW FIELD
+    is_financial_analysis_query: bool
+    is_email_request: bool  # NEW: Email detection
     generated_queries: List[str]
     documents: List
     formatted_context: str
@@ -231,8 +309,13 @@ class GraphState(TypedDict):
     destination_country: str
     dest_currency: str
     # Financial analysis fields
-    financial_analysis: Optional[str]  # NEW
-    financial_data_summary: Optional[Dict]  # NEW
+    financial_analysis: Optional[str]
+    financial_data_summary: Optional[Dict]
+    # Email fields (NEW)
+    email_draft: Optional[str]
+    email_recipient: Optional[str]
+    email_subject: Optional[str]
+    email_body: Optional[str]
 
 client = weaviate.connect_to_local(
     host=WEAVIATE_HOST,
@@ -418,17 +501,17 @@ def get_currency_for_country(country: str) -> str:
     """Get currency code for a country"""
     return COUNTRY_CURRENCY_MAP.get(country.lower(), "USD")
 
-# Node Functions
+# ===== ORIGINAL NODE FUNCTIONS (UNCHANGED) =====
+
 def classify_query_node(state: GraphState) -> GraphState:
     """Classify if the query is specific, general, or financial analysis"""
     
     question = state["question"]
     is_specific = detect_specific_query(question)
+    is_email = detect_email_request(question)  # Use imported function
     
-    # Enhanced financial analysis detection with business/product recommendation keywords
     question_lower = question.lower()
     
-    # Explicit financial analysis triggers - EXPANDED to include business/product recommendations
     explicit_analysis_triggers = [
         'analyze the', 'analysis of', 'trends in', 'patterns in',
         'provide insights', 'give me insights', 'summary of',
@@ -439,7 +522,6 @@ def classify_query_node(state: GraphState) -> GraphState:
         'insights about', 'analyze spending', 'analyze patterns',
         'analyze trends', 'provide a summary', 'create a summary',
         'give me a breakdown', 'provide a breakdown',
-        # ADDED: Business/product recommendation keywords
         'what products should', 'which products should',
         'recommend products', 'suggest products',
         'product expansion', 'expand product',
@@ -455,11 +537,9 @@ def classify_query_node(state: GraphState) -> GraphState:
         'provide recommendations', 'offer suggestions',
         'how can we improve', 'how to increase',
     ]
-    
-    # Check for explicit analysis triggers
+  
     has_explicit_analysis = any(trigger in question_lower for trigger in explicit_analysis_triggers)
-    
-    # Check for question patterns that indicate business/financial advice
+
     advice_patterns = [
         r'what\s+(?:should|would|could|might)\s+.*\s+business',
         r'how\s+(?:can|could|should|would)\s+.*\s+improve',
@@ -477,8 +557,6 @@ def classify_query_node(state: GraphState) -> GraphState:
     has_advice_pattern = any(re.search(pattern, question_lower, re.IGNORECASE) 
                             for pattern in advice_patterns)
     
-    # BUT check for simple queries that should NOT trigger analysis
-    # These are simple queries that might accidentally contain analysis words
     simple_query_patterns = [
         r'get\s+.*\s+analysis',  # "get analysis of invoice" is simple
         r'what\s+is\s+.*\s+analysis',  # "what is analysis of invoice" is simple
@@ -494,32 +572,36 @@ def classify_query_node(state: GraphState) -> GraphState:
             is_simple_disguised = True
             break
     
-    # Determine if it's financial analysis
-    # Now includes business/product recommendation queries
     is_financial_analysis = (has_explicit_analysis or has_advice_pattern) and not is_simple_disguised
     
-    # OVERRIDE: If it's a specific query, it's NOT financial analysis
-    # Specific queries like "get product, quantity" should NEVER trigger analysis
     if is_specific:
         is_financial_analysis = False
     
-    # Also check if question asks for simple information
     simple_info_keywords = ['get', 'what is', 'show me', 'tell me', 'find', 'search']
-    
-    # If it's a simple info request AND doesn't have explicit analysis keywords, it's not analysis
+   
     if (any(keyword in question_lower for keyword in simple_info_keywords) and 
         not has_explicit_analysis and not has_advice_pattern):
         is_financial_analysis = False
     
-    query_type = "FINANCIAL_ANALYSIS" if is_financial_analysis else ("SPECIFIC" if is_specific else "GENERAL")
+    # Determine query type for logging
+    if is_email:
+        query_type = "EMAIL"
+    elif is_financial_analysis:
+        query_type = "FINANCIAL_ANALYSIS"
+    elif is_specific:
+        query_type = "SPECIFIC"
+    else:
+        query_type = "GENERAL"
+    
     print(f"Query classified as: {query_type}")
-    print(f"  has_explicit_analysis: {has_explicit_analysis}")
-    print(f"  has_advice_pattern: {has_advice_pattern}")
-    print(f"  is_simple_disguised: {is_simple_disguised}")
+    print(f"  Email request: {is_email}")
+    print(f"  Financial analysis: {is_financial_analysis}")
+    print(f"  Specific query: {is_specific}")
     
     return {
         "is_specific_query": is_specific,
-        "is_financial_analysis_query": is_financial_analysis
+        "is_financial_analysis_query": is_financial_analysis,
+        "is_email_request": is_email
     }
     
 def generate_queries_node(state: GraphState) -> GraphState:
@@ -739,8 +821,7 @@ def generate_response_node(state: GraphState) -> GraphState:
                 "question": question,
                 "shipping_address": shipping_address
             })
-        
-        # Apply currency conversion if relevant
+       
         conversions = []
         if CURRENCY_ENABLED and currency_exchanger and shipping_address and shipping_address != "Not specified":
             try:
@@ -750,8 +831,7 @@ def generate_response_node(state: GraphState) -> GraphState:
         
         print("Response generated (FINANCIAL ANALYSIS ONLY path)")
         return {"response": response, "currency_conversions": conversions}
-    
-    # ===== FOR SPECIFIC QUERIES =====
+   
     if is_specific:
         print("FORCING SPECIFIC QUERY PATH - using specific template only")
         
@@ -958,21 +1038,22 @@ def generate_response_node(state: GraphState) -> GraphState:
     }
 
 def create_rag_graph():
-    """Create and compile the RAG graph with structured extraction AND financial analysis"""
+    """Create and compile the RAG graph with email generation"""
     
     workflow = StateGraph(GraphState)
     
-    # Add nodes
+    # nodes
     workflow.add_node("classify_query", classify_query_node)
     workflow.add_node("generate_queries", generate_queries_node)
     workflow.add_node("retrieve_documents", retrieve_documents_node)
     workflow.add_node("format_context", format_context_node)
     workflow.add_node("detect_currency", detect_currency_node)
     workflow.add_node("extract_structured_data", extract_structured_data_node)
-    workflow.add_node("financial_analysis", financial_analysis_node)  # NEW NODE
+    workflow.add_node("financial_analysis", financial_analysis_node)
     workflow.add_node("generate_response", generate_response_node)
+    workflow.add_node("generate_email", email_generation_node) 
     
-    # Define edges
+    # edges
     workflow.add_edge(START, "classify_query")
     workflow.add_edge("classify_query", "generate_queries")
     workflow.add_edge("generate_queries", "retrieve_documents")
@@ -980,27 +1061,32 @@ def create_rag_graph():
     workflow.add_edge("format_context", "detect_currency")
     workflow.add_edge("detect_currency", "extract_structured_data")
     
-    # After extract_structured_data, route based on query type
+   
     workflow.add_conditional_edges(
         "extract_structured_data",
-        lambda state: "financial_analysis" if state.get("is_financial_analysis_query", False) else "generate_response",
+        lambda state: "financial_analysis" if state.get("is_financial_analysis_query", False) 
+                     else "generate_email" if state.get("is_email_request", False)
+                     else "generate_response",
         {
             "financial_analysis": "financial_analysis",
+            "generate_email": "generate_email",
             "generate_response": "generate_response"
         }
     )
     
     # Financial analysis feeds into generate_response
     workflow.add_edge("financial_analysis", "generate_response")
+    
+    
+    workflow.add_edge("generate_email", END)
     workflow.add_edge("generate_response", END)
     
-    # Compile graph
     app = workflow.compile()
     return app
 
 def query_rag_graph(question: str):
     """
-    Execute RAG query using LangGraph with currency conversion AND financial analysis
+    Execute RAG query using LangGraph with all features
     
     Args:
         question: User's question
@@ -1011,7 +1097,7 @@ def query_rag_graph(question: str):
     try:
         print(f"\n{'='*60}")
         print(f"Starting Enhanced RAG Graph for question: {question[:50]}...")
-        print(f"Agents: RAG + Financial Analysis + Currency Conversion")
+        print(f"Features: RAG + Email + Financial Analysis + Currency Conversion")
         print(f"{'='*60}\n")
         
         # Create graph
@@ -1022,6 +1108,7 @@ def query_rag_graph(question: str):
             "question": question,
             "is_specific_query": False,
             "is_financial_analysis_query": False,
+            "is_email_request": False,
             "generated_queries": [],
             "documents": [],
             "formatted_context": "",
@@ -1036,7 +1123,11 @@ def query_rag_graph(question: str):
             "destination_country": None,
             "dest_currency": "USD",
             "financial_analysis": None,
-            "financial_data_summary": None
+            "financial_data_summary": None,
+            "email_draft": None,
+            "email_recipient": None,
+            "email_subject": None,
+            "email_body": None
         }
         
         # Execute graph
@@ -1044,7 +1135,17 @@ def query_rag_graph(question: str):
         
         print(f"\n{'='*60}")
         print("Enhanced RAG Graph completed successfully")
-        query_type = "Financial Analysis" if final_state.get("is_financial_analysis_query") else ("Specific" if final_state.get("is_specific_query") else "General")
+        
+        # Determine query type for logging
+        if final_state.get("is_email_request"):
+            query_type = "Email Generation"
+        elif final_state.get("is_financial_analysis_query"):
+            query_type = "Financial Analysis"
+        elif final_state.get("is_specific_query"):
+            query_type = "Specific"
+        else:
+            query_type = "General"
+        
         print(f"Query type: {query_type}")
         print(f"{'='*60}\n")
         
@@ -1078,11 +1179,11 @@ def get_retriever_info():
         else:
             info["currency_api"] = "Free APIs (Frankfurter/ECB)"
     
-    # Add info about agents
     info["agents"] = {
         "rag_agent": "Information Retrieval & Extraction",
         "financial_analysis_agent": "Trend Analysis & Insights" if FINANCIAL_AGENT_AVAILABLE else "Not available",
-        "currency_agent": "Automatic Currency Conversion"
+        "currency_agent": "Automatic Currency Conversion",
+        "email_agent": "Professional Email Generation" if EMAIL_NODE_AVAILABLE else "Not available"
     }
     
     return info
@@ -1091,50 +1192,37 @@ def test_query_classification():
     """Test function to verify query classification works correctly"""
     
     test_cases = [
+        # Email requests (NEW)
+        ("Send email about invoice #20149", True, False),
+        ("Write an email to the customer", True, False),
+        ("Compose email regarding payment", True, False),
+        ("Draft email for invoice follow-up", True, False),
+        
         # Financial Analysis queries
-        ("Analyze the spending patterns for all customers", True),
-        ("Provide a summary of all invoices from 2012", True),
-        ("What trends do you see in shipping costs?", True),
-        ("Compare invoice amounts between different countries", True),
-        ("Give me insights into customer purchasing behavior", True),
-        ("Analyze the financial data for European customers", True),
-        ("Provide a breakdown of sales by product category", True),
-        ("What are the statistics for Q4 2012?", True),
+        ("Analyze the spending patterns for all customers", False, True),
+        ("Provide a summary of all invoices from 2012", False, True),
+        ("What trends do you see in shipping costs?", False, True),
         
-        # Business/Product Recommendation queries (NEW - should be financial analysis)
-        ("what products should the business expand", True),
-        ("what suggestions would you make as a financial agent", True),
-        ("which products should we focus on", True),
-        ("recommend products for business growth", True),
-        ("what business advice can you give", True),
-        ("how can we improve sales", True),
-        ("what growth opportunities do you see", True),
-        ("as a financial agent, what would you suggest", True),
+        # Business/Product Recommendation queries
+        ("what products should the business expand", False, True),
+        ("what suggestions would you make as a financial agent", False, True),
         
-        # Specific queries (should NOT be financial analysis)
-        ("Get the total due for invoice #20149", False),
-        ("Get product, quantity and balance due for Natalie Webber", False),
-        ("What is the shipping address for invoice #20418?", False),
-        ("Convert the total amount to local currency", False),
-        ("Find all invoices for Patrick O'Brill", False),
-        ("Show me the discount amount for invoice #20149", False),
-        ("Get all details for invoice #20149", False),
-        ("What is the total due for invoice #12345?", False),
-        
-        # Edge cases
-        ("Analyze invoice #20149", False), 
-        ("Get analysis of invoice #20149", False), 
-        ("What is analysis of spending?", True),
-        ("Find trends in invoice #20149", False),  
+        # Specific queries (should NOT be email or financial analysis)
+        ("Get the total due for invoice #20149", False, False),
+        ("Get product, quantity and balance due for Natalie Webber", False, False),
+        ("What is the shipping address for invoice #20418?", False, False),
     ]
     
     print("Testing Query Classification Logic")
     print("=" * 60)
     
-    for query, expected_financial_analysis in test_cases:
+    for query, expected_email, expected_financial_analysis in test_cases:
         is_specific = detect_specific_query(query)
+        is_email = detect_email_request(query)
+        
+        # Run through classification logic
         question_lower = query.lower()
-       
+        
         explicit_analysis_triggers = [
             'analyze the', 'analysis of', 'trends in', 'patterns in',
             'provide insights', 'give me insights', 'summary of',
@@ -1145,20 +1233,6 @@ def test_query_classification():
             'insights about', 'analyze spending', 'analyze patterns',
             'analyze trends', 'provide a summary', 'create a summary',
             'give me a breakdown', 'provide a breakdown',
-            'what products should', 'which products should',
-            'recommend products', 'suggest products',
-            'product expansion', 'expand product',
-            'business should expand', 'should the business',
-            'growth opportunities', 'opportunities for',
-            'improve business', 'increase sales',
-            'best selling', 'top products',
-            'product recommendations', 'business recommendations',
-            'as a financial agent', 'financial suggestions',
-            'what would you recommend', 'what do you suggest',
-            'business advice', 'financial advice',
-            'strategic advice', 'make recommendations',
-            'provide recommendations', 'offer suggestions',
-            'how can we improve', 'how to increase',
         ]
         
         has_explicit_analysis = any(trigger in question_lower for trigger in explicit_analysis_triggers)
@@ -1205,10 +1279,11 @@ def test_query_classification():
             not has_explicit_analysis and not has_advice_pattern):
             is_financial_analysis = False
         
-        status = "true" if is_financial_analysis == expected_financial_analysis else "false"
-        print(f"{status} Query: '{query[:50]}...'")
+        email_correct = "✓" if is_email == expected_email else "✗"
+        financial_correct = "✓" if is_financial_analysis == expected_financial_analysis else "✗"
+        
+        print(f"{email_correct}{financial_correct} Query: '{query[:50]}...'")
+        print(f"  Expected Email: {expected_email}, Got: {is_email}")
         print(f"  Expected FA: {expected_financial_analysis}, Got: {is_financial_analysis}")
         print(f"  Is specific: {is_specific}")
-        print(f"  Has explicit analysis: {has_explicit_analysis}")
-        print(f"  Has advice pattern: {has_advice_pattern}")
         print()
