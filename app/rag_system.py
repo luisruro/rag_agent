@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from config import *
 from prompts import *
+from langfuse_trace import *
 from currency_exchange import currency_exchanger
 from invoice_model import Invoice
 from structured_extraction import extract_structured_invoice, format_invoice_response
@@ -1131,7 +1132,10 @@ def query_rag_graph(question: str):
         }
         
         # Execute graph
-        final_state = app.invoke(initial_state)
+        final_state = app.invoke(
+            initial_state,
+            config={"callbacks": [langfuse_handler]}
+        )
         
         print(f"\n{'='*60}")
         print("Enhanced RAG Graph completed successfully")

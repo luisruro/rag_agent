@@ -95,3 +95,36 @@ This project creates (if not already existing) a collection named DocumentChunk,
 - text: The chunk text content
 - source: The original PDF file the chunk came from
 - chunk_index: The position of the chunk within the document
+
+## 📊 Langfuse Integration (LLM Observability)
+
+This project uses Langfuse to track prompts, responses, performance, and LLM costs.
+Langfuse runs as a separate service, and this application connects to it only through the SDK.
+
+### 🚀 How to Run Langfuse
+
+1. Clone the official Langfuse repository.
+`git clone https://github.com/langfuse/langfuse.git`
+`cd langfuse`
+
+2. Start the Langfuse service using Docker
+`docker compose up`
+
+Once it finishes starting, open http://localhost:3000 in your browser to access the Langfuse UI.
+
+3. Create an account (only the first time)
+
+4. Generate API keys and add them to your **.env** file
+```
+LANGFUSE_SECRET_KEY=sk-xxxxx 
+LANGFUSE_PUBLIC_KEY=pk-xxxxx
+```
+
+5. Rebuild your application image (so it loads the new .env values)
+
+`docker compose build`
+`docker compose up -d`
+
+### Notes
+
+If you deploy Langfuse in the cloud later, only change the LANGFUSE_HOST value.
