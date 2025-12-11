@@ -44,33 +44,46 @@ def detect_email_request(question: str) -> bool:
 
 
 def extract_email_info_from_context(context: str) -> Dict:
-    """Extract email addresses and recipient names from context."""
+    """Extract email addresses and recipient info from context"""
     emails = re.findall(STRICT_EMAIL_REGEX, context)
-
-    # Name extraction patterns
+    
     name_patterns = [
-        r'Customer[:\s]+([\w\s]+?)(?:\n|$)',
-        r'Bill To[:\s]+([\w\s]+?)(?:\n|$)',
-        r'Ship To[:\s]+([\w\s]+?)(?:\n|$)',
-        r'Invoice To[:\s]+([\w\s]+?)(?:\n|$)',
-        r'Contact[:\s]+([\w\s]+?)(?:\n|$)',
+        r'Customer[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', 
+        r'Bill To[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+        r'Ship To[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+        r'Invoice To[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+        r'Contact[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
     ]
-
+    
     recipient_name = "Customer"
     for pattern in name_patterns:
         match = re.search(pattern, context, re.IGNORECASE)
         if match:
             name = match.group(1).strip()
-            if name and len(name) < 50:
+            
+            name = re.split(r',|\n|\(', name)[0].strip()
+            if name and 3 <= len(name) <= 50:
                 recipient_name = name
+                print(f"Extracted customer name: {recipient_name}")
                 break
-
+    
+    
+    if recipient_name == "Customer":
+        name_match = re.search(r'([A-Z][a-z]+ [A-Z][a-z]+)', context)
+        if name_match:
+            potential_name = name_match.group(1)
+           
+            if potential_name not in ['Invoice Date', 'Bill To', 'Ship To']:
+                recipient_name = potential_name
+                print(f"Fallback name found: {recipient_name}")
+    
+    primary_email = emails[0] if emails else "colombiastorecommerce@gmail.com"
+    
     return {
         "emails": emails,
         "recipient_name": recipient_name,
-        "primary_email": emails[0] if emails else None
+        "primary_email": primary_email
     }
-
 
 def extract_shipping_address_from_context(context: str) -> Optional[str]:
     """Extract shipping address from context for currency conversion"""

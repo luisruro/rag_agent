@@ -8,4 +8,3 @@ langfuse = get_client()
 langfuse_handler = CallbackHandler()
 
 
-
